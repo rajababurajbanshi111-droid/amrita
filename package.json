@@ -1,0 +1,28 @@
+{
+  "name": "smart-webrtc-classroom",
+  "version": "2.0.0",
+  "description": "Smart WebRTC Classroom - Secure Browser-Based Classroom Platform for GitHub Pages & Hosted Node.js Backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node -c server.js && node -c js/app.js"
+  },
+  "keywords": [
+    "webrtc",
+    "classroom",
+    "github-pages",
+    "screenshare",
+    "whiteboard",
+    "attendance",
+    "signaling",
+    "p2p"
+  ],
+  "author": "Smart WebRTC Classroom",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
