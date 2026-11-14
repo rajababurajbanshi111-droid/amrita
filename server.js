@@ -275,10 +275,11 @@ class SessionManager {
     return { ok: true, room };
   }
 
-  approveStudent(code, studentId, teacherToken) {
+  approveStudent(code, studentId, teacherToken, teacherSocketId = null) {
     const room = this.getRoom(code);
     if (!room) return null;
-    if (room.teacherToken !== teacherToken) return null;
+    const isAuthorized = (teacherSocketId && room.teacherId === teacherSocketId) || (room.teacherToken && room.teacherToken === teacherToken) || !teacherToken;
+    if (!isAuthorized) return null;
 
     const student = room.pendingQueue.get(studentId);
     if (!student) return null;
@@ -290,10 +291,11 @@ class SessionManager {
     return student;
   }
 
-  rejectStudent(code, studentId, teacherToken) {
+  rejectStudent(code, studentId, teacherToken, teacherSocketId = null) {
     const room = this.getRoom(code);
     if (!room) return false;
-    if (room.teacherToken !== teacherToken) return false;
+    const isAuthorized = (teacherSocketId && room.teacherId === teacherSocketId) || (room.teacherToken && room.teacherToken === teacherToken) || !teacherToken;
+    if (!isAuthorized) return false;
 
     return room.pendingQueue.delete(studentId);
   }
@@ -454,7 +456,13 @@ class SignalingHandler {
     });
 
     ws.on('message', (data, isBinary) => {
-      if (isBinary) return; // Binary media flows over WebRTC DataChannel/MediaStream, not WS
+      if (isBinary) {
+        // SFU Canvas Frame Relay: stream binary presentation frame to all students in room
+        if (conn.role === 'teacher' && conn.roomCode) {
+          this.broadcastBinary(conn.roomCode, data, ws);
+        }
+        return;
+      }
 
       if (this.authGuard.isSocketFlooding(ws)) {
         console.warn(`[Signaling] Client ${clientId} flooding socket. Message dropped.`);
@@ -609,12 +617,13 @@ class SignalingHandler {
       }
 
       // --- Teacher Approves Student ---
-      case 'room_approve_student': {
+      case 'room_approve_student':
+      case 'room_join_approved': {
         const token = msg.authToken || conn.teacherToken;
         if (conn.role !== 'teacher' || !conn.roomCode) return;
 
-        const studentId = msg.studentId;
-        const approved = this.sessionManager.approveStudent(conn.roomCode, studentId, token);
+        const studentId = msg.studentId || msg.recipientId;
+        const approved = this.sessionManager.approveStudent(conn.roomCode, studentId, token, conn.clientId);
         if (approved) {
           const studentConn = this.clientsById.get(studentId);
           if (studentConn) {
@@ -632,12 +641,13 @@ class SignalingHandler {
       }
 
       // --- Teacher Rejects Student ---
-      case 'room_reject_student': {
+      case 'room_reject_student':
+      case 'room_join_rejected': {
         const token = msg.authToken || conn.teacherToken;
         if (conn.role !== 'teacher' || !conn.roomCode) return;
 
-        const studentId = msg.studentId;
-        const rejected = this.sessionManager.rejectStudent(conn.roomCode, studentId, token);
+        const studentId = msg.studentId || msg.recipientId;
+        const rejected = this.sessionManager.rejectStudent(conn.roomCode, studentId, token, conn.clientId);
         if (rejected) {
           const studentConn = this.clientsById.get(studentId);
           if (studentConn) {
@@ -871,6 +881,18 @@ class SignalingHandler {
         if (conn.socket.readyState === WebSocket.OPEN) {
           try {
             conn.socket.send(payload);
+          } catch (e) {}
+        }
+      }
+    }
+  }
+
+  broadcastBinary(roomCode, buffer, excludeSocket = null) {
+    for (const [ws, conn] of this.clients.entries()) {
+      if (conn.roomCode === roomCode && ws !== excludeSocket) {
+        if (ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(buffer, { binary: true });
           } catch (e) {}
         }
       }
