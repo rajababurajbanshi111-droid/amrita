@@ -1165,22 +1165,59 @@
   <!-- 4. Classroom Moderation & Monitoring Engine -->
   <!-- 5. Specialized Controllers & Academic Modules -->
   <!-- 6. Main Application Orchestrator & UI Controller -->
-  <!-- Core Modular Scripts (PeerJS loaded for GitHub Pages static fallback) -->
-  <script src="js/peerjs.min.js"></script>
-  <script src="js/config.js"></script>
-  <script src="js/utils.js"></script>
-  <script src="js/qr-code.js"></script>
-  <script src="js/webrtc.js"></script>
-  <script src="js/signaling.js"></script>
-  <script src="js/screenshare.js"></script>
-  <script src="js/datachannel.js"></script>
-  <script src="js/whiteboard.js"></script>
-  <script src="js/filetransfer.js"></script>
-  <script src="js/media.js"></script>
-  <script src="js/diagnostics.js"></script>
-  <script src="js/classroom.js"></script>
-  <script src="js/monitoring.js"></script>
-  <script src="js/attendance.js"></script>
-  <script src="js/app.js"></script>
+  <!-- JavaScript Client Modules (Universal Root & js/ Subfolder Loader) -->
+  <script>
+    (function () {
+      var scriptList = [
+        'peerjs.min.js',
+        'config.js',
+        'utils.js',
+        'qr-code.js',
+        'webrtc.js',
+        'signaling.js',
+        'screenshare.js',
+        'datachannel.js',
+        'whiteboard.js',
+        'filetransfer.js',
+        'media.js',
+        'diagnostics.js',
+        'classroom.js',
+        'monitoring.js',
+        'attendance.js',
+        'app.js'
+      ];
+
+      // Auto-detect whether files are in root or inside js/ folder
+      var folder = '';
+      try {
+        var testReq = new XMLHttpRequest();
+        testReq.open('HEAD', 'config.js', false);
+        testReq.send(null);
+        if (testReq.status === 404) {
+          folder = 'js/';
+        }
+      } catch (e) {
+        folder = '';
+      }
+
+      for (var i = 0; i < scriptList.length; i++) {
+        document.write('<script src="' + folder + scriptList[i] + '"><\/script>');
+      }
+    })();
+  </script>
+
+  <!-- Script Health Diagnostics Checker -->
+  <script>
+    window.addEventListener('load', function () {
+      setTimeout(function () {
+        if (typeof WebRTCManager === 'undefined' || typeof SmartClassroomConfig === 'undefined') {
+          var alertBox = document.createElement('div');
+          alertBox.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#A41264;border:2px solid #FFA6D8;color:#FFFFFF;padding:16px 28px;border-radius:12px;font-family:sans-serif;font-size:15px;box-shadow:0 10px 30px rgba(0,0,0,0.85);z-index:9999999;text-align:center;max-width:90%;line-height:1.6;';
+          alertBox.innerHTML = '<strong>⚠️ JavaScript modules could not load!</strong><br/>Please make sure <code>index.html</code> on GitHub has been updated with the latest version.';
+          document.body.appendChild(alertBox);
+        }
+      }, 1500);
+    });
+  </script>
 </body>
 </html>
