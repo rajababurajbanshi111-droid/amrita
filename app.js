@@ -826,6 +826,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       showToast('Launching native screen capture dialog...', 'info');
       const stream = await screenShare.startScreenShare(preset, true);
       teacherScreenPreview.srcObject = stream;
+      teacherScreenPreview.play().catch(() => {});
       teacherStageEmptyState.style.display = 'none';
       teacherStageControls.style.display = 'flex';
       teacherSidebarScreenDot.style.display = 'inline-block';
@@ -839,8 +840,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         signaling.send({ type: 'stream_started', hasAudio: hasAudio });
       }
     } catch (err) {
-      if (err.name !== 'NotAllowedError') {
-        showToast(`Screen share error: ${err.message}`, 'error');
+      console.warn('[App] Screen share launch note:', err);
+      if (err.name !== 'NotAllowedError' && (!err.message || !err.message.toLowerCase().includes('cancel'))) {
+        showToast(`Screen share notice: ${err.message || 'Please select a screen or window to share.'}`, 'warning');
+      } else {
+        showToast('Screen share dialog was cancelled.', 'info');
       }
     }
   }

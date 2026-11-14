@@ -155,6 +155,12 @@ class SignalingManager {
       ? window.SmartClassroomConfig.getWebSocketUrl()
       : ((window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host + '/ws');
 
+    if (!wsUrl || !wsUrl.trim()) {
+      console.log('[Signaling] No backend WebSocket URL configured. Engaging serverless P2P cloud directly.');
+      if (onFallback) onFallback();
+      return false;
+    }
+
     console.log('[Signaling] Connecting to backend WebSocket:', wsUrl);
     let opened = false;
     let ws = null;
@@ -173,7 +179,7 @@ class SignalingManager {
         try { ws.close(); } catch(e) {}
         if (onFallback) onFallback();
       }
-    }, 4000);
+    }, 1800);
 
     ws.onopen = () => {
       opened = true;
@@ -471,61 +477,52 @@ class SignalingManager {
     }
 
     try {
-      this.peer = new Peer(this.getPeerConfig());
+      // Deterministic student peer ID avoids fragile HTTP /peerjs/id API calls
+      const studentPeerId = 'smartclass-room-' + this.currentRoomCode + '-student-' + SecurityManager.generateSessionCode(6);
+      this.clientId = studentPeerId;
+      this.peer = new Peer(studentPeerId, this.getPeerConfig());
 
-      this.peer.on('open', (myId) => {
-        console.log('[Signaling] Student PeerJS ready with ID:', myId);
-        this.clientId = myId;
-        this.isConnected = true;
-        this.startHeartbeat();
-        if (this.onServerStatusChange) this.onServerStatusChange(true, 'PeerJS Serverless (Port 443)');
+      let retryCount = 0;
+      let isConnectedToTeacher = false;
+      const teacherPeerId = 'smartclass-room-' + this.currentRoomCode + '-teacher';
 
-        const teacherPeerId = 'smartclass-room-' + this.currentRoomCode + '-teacher';
-        console.log('[Signaling] Connecting student to teacher:', teacherPeerId);
+      const sendJoinPing = () => {
+        if (this.teacherConn && this.teacherConn.open) {
+          try {
+            this.teacherConn.send({
+              type: 'room_join_request',
+              senderId: this.clientId,
+              studentName: this.studentName,
+              rollNo: this.studentRollNo || 'N/A',
+              roomCode: this.currentRoomCode,
+              clientInfo: {
+                userAgent: navigator.userAgent,
+                screenRes: window.screen.width + 'x' + window.screen.height
+              }
+            });
+            console.log('[Signaling] Sent join request ping to professor');
+          } catch(e) {}
+        }
+      };
+
+      const connectToTeacher = () => {
+        if (isConnectedToTeacher || (this.teacherConn && this.teacherConn.open)) return;
+        console.log(`[Signaling] Connecting student to teacher: ${teacherPeerId} (Attempt #${retryCount + 1})`);
 
         const conn = this.peer.connect(teacherPeerId, {
-          serialization: 'binary',
+          reliable: true,
           metadata: { studentName: this.studentName, rollNo: this.studentRollNo || 'N/A' }
         });
-
         this.teacherConn = conn;
 
-        const sendJoinPing = () => {
-          if (conn && conn.open) {
-            try {
-              conn.send({
-                type: 'room_join_request',
-                senderId: myId,
-                studentName: this.studentName,
-                rollNo: this.studentRollNo || 'N/A',
-                roomCode: this.currentRoomCode,
-                clientInfo: {
-                  userAgent: navigator.userAgent,
-                  screenRes: window.screen.width + 'x' + window.screen.height
-                }
-              });
-              console.log('[Signaling] Sent join request ping to professor');
-            } catch(e) {}
-          }
-        };
-
         conn.on('open', () => {
+          isConnectedToTeacher = true;
           console.log('[Signaling] Data channel connected to professor! Sending join request...');
           if (conn.peerConnection && window.webrtc) {
             window.webrtc.peerConnections.set(teacherPeerId, conn.peerConnection);
           }
           sendJoinPing();
         });
-
-        // Periodic join request ping while waiting for admission approval
-        this.studentJoinInterval = setInterval(() => {
-          if (window.classroom && window.classroom.isApproved) {
-            clearInterval(this.studentJoinInterval);
-            this.studentJoinInterval = null;
-            return;
-          }
-          sendJoinPing();
-        }, 1500);
 
         conn.on('data', (data) => {
           if (data instanceof ArrayBuffer || data instanceof Blob || (data && data.byteLength !== undefined) || (data && data.buffer instanceof ArrayBuffer)) {
@@ -546,12 +543,37 @@ class SignalingManager {
 
         conn.on('close', () => {
           console.warn('[Signaling] Connection to teacher lost.');
+          isConnectedToTeacher = false;
           if (this.onRoomTerminated) this.onRoomTerminated();
         });
 
         conn.on('error', (err) => {
-          console.error('[Signaling] Teacher connection error:', err);
+          console.warn('[Signaling] Teacher connection attempt note:', err);
         });
+      };
+
+      this.peer.on('open', (myId) => {
+        console.log('[Signaling] Student PeerJS ready with ID:', myId);
+        this.clientId = myId;
+        this.isConnected = true;
+        this.startHeartbeat();
+        if (this.onServerStatusChange) this.onServerStatusChange(true, 'PeerJS Serverless (Port 443)');
+
+        connectToTeacher();
+
+        // Periodic join request ping while waiting for admission approval
+        this.studentJoinInterval = setInterval(() => {
+          if (window.classroom && window.classroom.isApproved) {
+            clearInterval(this.studentJoinInterval);
+            this.studentJoinInterval = null;
+            return;
+          }
+          if (isConnectedToTeacher) {
+            sendJoinPing();
+          } else if (!this.teacherConn || !this.teacherConn.open) {
+            connectToTeacher();
+          }
+        }, 1500);
       });
 
       // Handle incoming screen presentation call from teacher
@@ -626,10 +648,22 @@ class SignalingManager {
       });
 
       this.peer.on('error', (err) => {
-        console.warn('[Signaling] PeerJS Student error:', err.type, err.message);
+        console.warn('[Signaling] PeerJS Student event:', err.type, err.message);
         if (err.type === 'peer-unavailable') {
-          if (typeof showToast === 'function') {
-            showToast('Room ' + this.currentRoomCode + ' not found. Ensure professor is broadcasting.', 'warning');
+          retryCount++;
+          if (retryCount <= 15 && !isConnectedToTeacher) {
+            if (typeof showToast === 'function' && (retryCount === 1 || retryCount % 4 === 0)) {
+              showToast(`Connecting to room ${this.currentRoomCode}... (Attempt ${retryCount}/15)`, 'info');
+            }
+            setTimeout(() => {
+              if (!isConnectedToTeacher && (!this.teacherConn || !this.teacherConn.open)) {
+                connectToTeacher();
+              }
+            }, 2000);
+          } else if (retryCount > 15) {
+            if (typeof showToast === 'function') {
+              showToast(`Classroom ${this.currentRoomCode} not found. Please confirm the code and ensure professor is active.`, 'warning');
+            }
           }
         }
       });

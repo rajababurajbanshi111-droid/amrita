@@ -29,10 +29,10 @@ class ScreenShareManager {
   }
 
   /**
-   * Starts screen capture with specified quality preset and system audio request
+   * Starts screen capture with multi-tier adaptive fallbacks (guarantees prompt launch on any monitor/OS)
    */
   async startScreenShare(presetKey = 'balanced', captureAudio = true) {
-    if (this.isSharing) {
+    if (this.isSharing && this.activeStream) {
       console.warn('[ScreenShare] Already active. Stop first before restarting.');
       return this.activeStream;
     }
@@ -42,28 +42,56 @@ class ScreenShareManager {
     }
 
     this.currentPreset = presetKey;
-    const preset = (window.SmartClassroomConfig && window.SmartClassroomConfig.SCREEN_PRESETS[presetKey])
+    const preset = (window.SmartClassroomConfig && window.SmartClassroomConfig.SCREEN_PRESETS && window.SmartClassroomConfig.SCREEN_PRESETS[presetKey])
       ? window.SmartClassroomConfig.SCREEN_PRESETS[presetKey]
       : { width: 1920, height: 1080, frameRate: 30, maxBitrate: 2500000 };
 
-    const displayMediaOptions = {
-      video: {
-        width: { ideal: preset.width, max: preset.width },
-        height: { ideal: preset.height, max: preset.height },
-        frameRate: { ideal: preset.frameRate, max: preset.frameRate },
-        cursor: 'always'
-      },
-      audio: captureAudio ? {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false
-      } : false
-    };
+    let stream = null;
+
+    // Strategy 1: Ideal dimensions with cursor and optional audio (no restrictive 'max' bounds)
+    try {
+      console.log('[ScreenShare] Tier 1: Requesting display media with ideal constraints...');
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          width: { ideal: preset.width },
+          height: { ideal: preset.height },
+          frameRate: { ideal: preset.frameRate },
+          cursor: 'always'
+        },
+        audio: captureAudio ? {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        } : false
+      });
+    } catch (err1) {
+      console.warn('[ScreenShare] Tier 1 capture failed, attempting video-only ideal fallback:', err1);
+      // If user explicitly pressed "Cancel" on native picker, respect cancellation and abort
+      if (err1.name === 'NotAllowedError' && (!err1.message || err1.message.toLowerCase().includes('permission denied') || err1.message.toLowerCase().includes('user cancelled') || err1.message.toLowerCase().includes('cancel'))) {
+        throw err1;
+      }
+
+      // Strategy 2: Video-only capture (bypasses OS/driver audio permission conflicts)
+      try {
+        console.log('[ScreenShare] Tier 2: Requesting video-only display media...');
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            cursor: 'always'
+          },
+          audio: false
+        });
+      } catch (err2) {
+        console.warn('[ScreenShare] Tier 2 capture failed, attempting bare video fallback:', err2);
+        // Strategy 3: Pure bare video constraints (universal compatibility across all browsers)
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: false
+        });
+      }
+    }
 
     try {
-      console.log('[ScreenShare] Requesting display media with constraints:', displayMediaOptions);
-      this.activeStream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
-
+      this.activeStream = stream;
       this.videoTrack = this.activeStream.getVideoTracks()[0];
       this.audioTrack = this.activeStream.getAudioTracks()[0] || null;
 
@@ -105,7 +133,7 @@ class ScreenShareManager {
 
       return this.activeStream;
     } catch (err) {
-      console.error('[ScreenShare] Error starting screen share:', err);
+      console.error('[ScreenShare] Error finalizing screen share:', err);
       this.cleanup();
       if (this.onError) {
         this.onError(err);

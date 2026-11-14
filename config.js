@@ -25,7 +25,7 @@
      * Resolves the active backend HTTP/HTTPS URL based on environment:
      * 1. User manual override stored in localStorage (`swc_backend_url`)
      * 2. Current origin if running on localhost / custom domain with local server
-     * 3. Production DEFAULT_BACKEND_URL for GitHub Pages
+     * 3. Production DEFAULT_BACKEND_URL (only if running with custom backend or explicitly enabled)
      */
     getBackendUrl: function () {
       if (typeof window === 'undefined') return DEFAULT_BACKEND_URL;
@@ -37,12 +37,18 @@
         }
       } catch (e) {}
 
-      // If running locally on Node.js static server
+      // If running locally on Node.js static server or on LAN IP
       if (window.location && window.location.hostname) {
         const host = window.location.hostname.toLowerCase();
         const isLocal = host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.') || host.startsWith('10.') || host.endsWith('.local');
         if (isLocal && window.location.port) {
           return `${window.location.protocol}//${window.location.host}`;
+        }
+
+        // On GitHub Pages without custom backend configured: return empty string
+        // so client immediately engages direct serverless P2P WebRTC without 4-second timeout stall!
+        if (host.endsWith('github.io')) {
+          return '';
         }
       }
 
@@ -54,6 +60,7 @@
      */
     getWebSocketUrl: function () {
       const httpUrl = this.getBackendUrl();
+      if (!httpUrl || !httpUrl.trim()) return null;
       const wsProto = httpUrl.startsWith('https:') ? 'wss:' : 'ws:';
       const cleanHost = httpUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
       return `${wsProto}//${cleanHost}/ws`;
