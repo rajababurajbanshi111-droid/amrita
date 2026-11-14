@@ -55,7 +55,7 @@ class ScreenShareManager {
         video: {
           width: { ideal: preset.width },
           height: { ideal: preset.height },
-          frameRate: { ideal: preset.frameRate },
+          frameRate: { ideal: preset.frameRate, max: 30 },
           cursor: 'always'
         },
         audio: captureAudio ? {
@@ -94,6 +94,11 @@ class ScreenShareManager {
       this.activeStream = stream;
       this.videoTrack = this.activeStream.getVideoTracks()[0];
       this.audioTrack = this.activeStream.getAudioTracks()[0] || null;
+
+      // Lock crystal-clear detail and eliminate resolution fluctuation
+      if (this.videoTrack && 'contentHint' in this.videoTrack) {
+        this.videoTrack.contentHint = 'detail';
+      }
 
       // Handle user clicking native browser "Stop sharing" bar
       this.videoTrack.onended = () => {

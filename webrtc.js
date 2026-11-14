@@ -74,7 +74,15 @@ class WebRTCManager {
         this.localStreams.forEach((stream) => {
           stream.getTracks().forEach((track) => {
             if (track.kind === 'video' && !hasVideo) {
-              pc.addTransceiver(track, { direction: 'sendrecv', streams: [stream] });
+              if ('contentHint' in track) track.contentHint = 'detail';
+              const t = pc.addTransceiver(track, { direction: 'sendrecv', streams: [stream] });
+              try {
+                const params = t.sender.getParameters();
+                if (params.encodings && params.encodings.length > 0) {
+                  params.encodings[0].degradationPreference = 'maintain-resolution';
+                  t.sender.setParameters(params).catch(() => {});
+                }
+              } catch(e) {}
               hasVideo = true;
             } else if (track.kind === 'audio' && !hasAudio) {
               pc.addTransceiver(track, { direction: 'sendrecv', streams: [stream] });
@@ -243,8 +251,6 @@ class WebRTCManager {
 
     if (gatherComplete) {
       await this.waitForIceGathering(pc);
-    } else {
-      await this.waitForInitialCandidates(pc, 1200);
     }
 
     return pc.localDescription || offer;
@@ -269,8 +275,6 @@ class WebRTCManager {
 
     if (gatherComplete) {
       await this.waitForIceGathering(pc);
-    } else {
-      await this.waitForInitialCandidates(pc, 1200);
     }
 
     return pc.localDescription || answer;
@@ -484,12 +488,15 @@ class WebRTCManager {
     this.peerConnections.forEach((pc) => {
       pc.getSenders().forEach((sender) => {
         if (sender.track && sender.track.kind === 'video') {
-          const params = sender.getParameters();
-          if (!params.encodings || params.encodings.length === 0) {
-            params.encodings = [{}];
-          }
-          params.encodings[0].maxBitrate = maxBitrateBps;
-          promises.push(sender.setParameters(params).catch((e) => console.warn('[WebRTC] setParameters failed:', e)));
+          try {
+            const params = sender.getParameters();
+            if (!params.encodings || params.encodings.length === 0) {
+              params.encodings = [{}];
+            }
+            params.encodings[0].maxBitrate = maxBitrateBps;
+            params.encodings[0].degradationPreference = 'maintain-resolution';
+            promises.push(sender.setParameters(params).catch((e) => console.warn('[WebRTC] setParameters failed:', e)));
+          } catch(e) {}
         }
       });
     });

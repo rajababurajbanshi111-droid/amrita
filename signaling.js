@@ -678,6 +678,21 @@ class SignalingManager {
       return;
     }
 
+    // STABILITY GUARD: If connection is already live and transmitting video, do not re-negotiate!
+    const existingPc = webrtc.peerConnections.get(studentId);
+    if (existingPc) {
+      const isAlreadyConnected = existingPc.connectionState === 'connected' &&
+        existingPc.getSenders().some((s) => s.track && s.track.kind === 'video' && s.track.readyState === 'live');
+      if (isAlreadyConnected) {
+        console.log(`[Signaling] Peer ${studentId} is already connected and streaming. Skipping redundant offer.`);
+        return;
+      }
+      if (existingPc.signalingState !== 'stable') {
+        console.log(`[Signaling] Peer ${studentId} signalingState is '${existingPc.signalingState}'. Postponing offer.`);
+        return;
+      }
+    }
+
     try {
       console.log(`[Signaling] Creating standard WebRTC screen offer for student: ${studentId}`);
       webrtc.addLocalStream('screen', this.activeStream);
@@ -796,8 +811,20 @@ class SignalingManager {
       case 'room_join_request': {
         const studentId = msg.senderId;
         if (this.approvedStudents.has(studentId) || (window.classroom && window.classroom.connectedStudents && window.classroom.connectedStudents.has(studentId))) {
-          console.log('[Signaling] Student is already approved. Re-sending approval:', studentId);
-          this.approveStudent(studentId);
+          this.send({
+            type: 'room_join_approved',
+            recipientId: studentId,
+            studentId: studentId,
+            roomCode: this.currentRoomCode,
+            teacherId: this.clientId,
+            permissions: { allowChat: true, allowFileTransfer: true }
+          });
+          const pc = window.webrtc && window.webrtc.peerConnections.get(studentId);
+          if (!pc || pc.connectionState !== 'connected') {
+            if (this.activeStream) {
+              this.initiateWebRtcOffer(studentId);
+            }
+          }
           return;
         }
         if (this.onJoinRequest) this.onJoinRequest(msg);
@@ -809,6 +836,10 @@ class SignalingManager {
         if (this.studentJoinInterval) {
           clearInterval(this.studentJoinInterval);
           this.studentJoinInterval = null;
+        }
+        if (window.classroom) {
+          window.classroom.isApproved = true;
+          window.classroom.isSessionActive = true;
         }
         this.send({
           type: 'room_join_ack',
@@ -823,7 +854,10 @@ class SignalingManager {
         console.log('[Signaling] Student confirmed admission ACK:', studentAckId);
         this.acknowledgedStudents.add(studentAckId);
         if (this.activeStream) {
-          this.initiateWebRtcOffer(studentAckId);
+          const pc = window.webrtc && window.webrtc.peerConnections.get(studentAckId);
+          if (!pc || pc.connectionState !== 'connected') {
+            this.initiateWebRtcOffer(studentAckId);
+          }
         }
         break;
       }
@@ -878,6 +912,11 @@ class SignalingManager {
 
       case 'request_stream':
         if (this.role === 'teacher' && this.activeStream) {
+          const pc = window.webrtc && window.webrtc.peerConnections.get(msg.senderId);
+          if (pc && pc.connectionState === 'connected') {
+            console.log(`[Signaling] Student ${msg.senderId} requested stream but is already connected. Skipping offer.`);
+            return;
+          }
           this.initiateWebRtcOffer(msg.senderId);
         }
         break;

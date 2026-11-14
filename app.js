@@ -985,16 +985,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     console.log('[App] Remote track received:', track.kind, 'from presenter:', peerId);
     if (stream && stream.getTracks().length > 0) {
-      studentRemoteVideo.srcObject = stream;
+      if (studentRemoteVideo.srcObject !== stream) {
+        studentRemoteVideo.srcObject = stream;
+      }
     } else {
       if (!studentRemoteVideo.srcObject) {
         studentRemoteVideo.srcObject = new MediaStream();
       }
-      const existing = studentRemoteVideo.srcObject.getTracks().find((t) => t.kind === track.kind);
+      const existing = studentRemoteVideo.srcObject.getTracks().find((t) => t.id === track.id || t.kind === track.kind);
       if (existing) {
-        studentRemoteVideo.srcObject.removeTrack(existing);
+        if (existing.id !== track.id) {
+          studentRemoteVideo.srcObject.removeTrack(existing);
+          studentRemoteVideo.srcObject.addTrack(track);
+        }
+      } else {
+        studentRemoteVideo.srcObject.addTrack(track);
       }
-      studentRemoteVideo.srcObject.addTrack(track);
     }
 
     if (classroom.isApproved) {
@@ -1017,14 +1023,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       studentRemoteVideo.style.setProperty('display', 'block', 'important');
 
       studentRemoteVideo.muted = true;
-      const play = () => {
+      if (studentRemoteVideo.paused) {
         studentRemoteVideo.play().catch(() => {});
-      };
-      play();
+      }
       track.onunmute = () => {
         setStreamEngine('webrtc');
         if (emptyState) emptyState.style.setProperty('display', 'none', 'important');
-        play();
+        if (studentRemoteVideo.paused) {
+          studentRemoteVideo.play().catch(() => {});
+        }
       };
       showToast('Amrita Live Screen Stream is active!', 'success');
     }
