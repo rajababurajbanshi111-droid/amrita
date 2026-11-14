@@ -89,6 +89,17 @@ class WhiteboardManager {
 
   setTool(tool) {
     this.tool = tool;
+    if (this.canvas) {
+      if (tool === 'text') {
+        this.canvas.style.cursor = 'text';
+      } else if (tool === 'laser') {
+        this.canvas.style.cursor = 'none';
+      } else if (tool === 'eraser') {
+        this.canvas.style.cursor = 'cell';
+      } else {
+        this.canvas.style.cursor = 'crosshair';
+      }
+    }
     if (tool === 'highlighter') {
       this.lineWidth = 14;
     } else if (tool === 'pen') {
@@ -124,6 +135,13 @@ class WhiteboardManager {
 
   handlePointerDown(e) {
     const pos = this.getCanvasCoords(e);
+
+    if (this.tool === 'text') {
+      this.isDrawing = false;
+      this.spawnTextInputAt(e, pos);
+      return;
+    }
+
     this.isDrawing = true;
     this.prevX = pos.x;
     this.prevY = pos.y;
@@ -134,6 +152,82 @@ class WhiteboardManager {
         this.router.broadcastPointer(pos.xPercent, pos.yPercent, true, this.color);
       }
     }
+  }
+
+  spawnTextInputAt(e, pos) {
+    const existing = document.getElementById('wbActiveTextInput');
+    if (existing) {
+      existing.blur();
+    }
+
+    const input = document.createElement('input');
+    input.id = 'wbActiveTextInput';
+    input.type = 'text';
+    input.placeholder = 'Type text and press Enter...';
+    input.style.cssText = `
+      position: fixed;
+      left: ${e.clientX}px;
+      top: ${e.clientY - 14}px;
+      font-family: inherit;
+      font-size: 16px;
+      font-weight: 600;
+      color: ${this.color || '#00f0ff'};
+      background: rgba(18, 5, 26, 0.94);
+      border: 1.5px solid #FFA6D8;
+      border-radius: 6px;
+      padding: 4px 10px;
+      outline: none;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+      z-index: 10000;
+      min-width: 180px;
+    `;
+
+    const commitText = () => {
+      const val = input.value.trim();
+      if (val && this.ctx) {
+        const fontSize = Math.max(16, this.lineWidth * 4);
+        this.ctx.save();
+        this.ctx.font = `bold ${fontSize}px sans-serif`;
+        this.ctx.fillStyle = this.color;
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(val, pos.x, pos.y);
+        this.ctx.restore();
+
+        const strokeObj = {
+          type: 'text',
+          text: val,
+          x: pos.xPercent,
+          y: pos.yPercent,
+          color: this.color,
+          fontSize: fontSize
+        };
+
+        if (this.router) {
+          this.router.broadcastWhiteboardStroke(strokeObj);
+        }
+        if (window.signaling && window.signaling.isConnected) {
+          window.signaling.send({
+            type: 'wb_stroke',
+            stroke: strokeObj
+          });
+        }
+      }
+      if (input.parentNode) input.parentNode.removeChild(input);
+    };
+
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        commitText();
+      } else if (ev.key === 'Escape') {
+        if (input.parentNode) input.parentNode.removeChild(input);
+      }
+    });
+
+    input.addEventListener('blur', commitText);
+
+    document.body.appendChild(input);
+    setTimeout(() => input.focus(), 30);
   }
 
   handlePointerMove(e) {
@@ -218,9 +312,21 @@ class WhiteboardManager {
   }
 
   renderRemoteStroke(stroke) {
-    if (!this.canvas || !this.ctx) return;
+    if (!this.canvas || !this.ctx || !stroke) return;
     const w = this.canvas.width;
     const h = this.canvas.height;
+
+    if (stroke.type === 'text') {
+      const fontSize = stroke.fontSize || 18;
+      this.ctx.save();
+      this.ctx.font = `bold ${fontSize}px sans-serif`;
+      this.ctx.fillStyle = stroke.color || '#00f0ff';
+      this.ctx.textBaseline = 'middle';
+      this.ctx.fillText(stroke.text || '', (stroke.x || 0) * w, (stroke.y || 0) * h);
+      this.ctx.restore();
+      return;
+    }
+
     this.drawStroke(
       stroke.x0 * w,
       stroke.y0 * h,

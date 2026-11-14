@@ -83,11 +83,13 @@ class ClassroomManager {
     };
 
     this.signalingManager.onStudentLeft = (msg) => {
-      const studentId = msg.studentId || msg.senderId;
+      const studentId = typeof msg === 'string' ? msg : (msg && (msg.studentId || msg.senderId));
+      if (!studentId) return;
       this.connectedStudents.delete(studentId);
       this.pendingApprovals.delete(studentId);
+      if (this.approvedStudentIds) this.approvedStudentIds.delete(studentId);
       if (this.webrtcManager) {
-        this.webrtcManager.closeConnection(studentId);
+        try { this.webrtcManager.closeConnection(studentId); } catch (e) {}
       }
       if (this.onStudentLeft) {
         this.onStudentLeft(studentId);

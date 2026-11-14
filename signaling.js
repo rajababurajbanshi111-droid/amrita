@@ -19,18 +19,48 @@ class SignalingManager {
     this.isConnected = false;
     this.isMqttMode = false;
     this.isWsMode = false;
+    this.isChannelMode = false;
     this.packetIdSeq = 1;
     this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 10;
+    this.maxReconnectAttempts = 12;
     this.reconnectTimer = null;
     this.pingInterval = null;
-    this.offlineDebounceTimer = null; // Debounce: don't flash "Offline" on natural MQTT keepalive cycles
-    this.isReconnecting = false;      // Suppress UI flicker during transient MQTT reconnects
+    this.offlineDebounceTimer = null;
+    this.isReconnecting = false;
+    this.sendQueue = [];
+    this.localBroadcast = null;
 
-    // Public WSS Brokers with auto-failover
+    // Multi-Transport Public Relays (Port 443 WSS Channel Relay prioritized for universal firewall bypass)
+    this.PUBLIC_RELAYS = [
+      {
+        id: 'piesocket_443',
+        name: 'Public Cloud Relay (Port 443)',
+        mode: 'channel',
+        getUrl: (room) => `wss://demo.piesocket.com/v3/amrita_swc_${room || 'lobby'}?api_key=VC3OtKQUdRFqiaAxVaegPfUXnk3P3zijdOzVAHg0&notify_self`
+      },
+      {
+        id: 'emqx_mqtt',
+        name: 'EMQX MQTT Cloud Broker',
+        mode: 'mqtt',
+        getUrl: () => 'wss://broker.emqx.io:8084/mqtt'
+      },
+      {
+        id: 'hivemq_mqtt',
+        name: 'HiveMQ MQTT Cloud Broker',
+        mode: 'mqtt',
+        getUrl: () => 'wss://broker.hivemq.com:8884/mqtt'
+      },
+      {
+        id: 'mosquitto_mqtt',
+        name: 'Mosquitto MQTT Cloud Broker',
+        mode: 'mqtt',
+        getUrl: () => 'wss://test.mosquitto.org:8081'
+      }
+    ];
+    this.activeRelayIndex = 0;
     this.PUBLIC_BROKERS = [
-      'wss://broker.hivemq.com:8884/mqtt',
-      'wss://broker.emqx.io:8084/mqtt'
+      'wss://broker.emqx.io:8084/mqtt',
+      'wss://broker.hivemq.com:8884/mqtt'
     ];
     this.activeBrokerIndex = 0;
 
@@ -247,42 +277,83 @@ class SignalingManager {
     } catch (e) {}
   }
 
+  getTransportLabel() {
+    if (this.isWsMode) return 'Local / Hosted LAN Server';
+    if (this.isChannelMode) return 'Signaling Online (Port 443 Relay)';
+    if (this.isMqttMode) return 'Signaling Online (MQTT Relay)';
+    return 'Signaling Online';
+  }
+
+  flushSendQueue() {
+    if (!this.isConnected || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    while (this.sendQueue.length > 0) {
+      const msg = this.sendQueue.shift();
+      this.send(msg);
+    }
+  }
+
+  updateBroadcastChannel() {
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const chanName = `amrita_room_${this.currentRoomCode || 'lobby'}`;
+        if (this.localBroadcast && this.localBroadcast.name !== chanName) {
+          try { this.localBroadcast.close(); } catch(e) {}
+          this.localBroadcast = null;
+        }
+        if (!this.localBroadcast) {
+          this.localBroadcast = new BroadcastChannel(chanName);
+          this.localBroadcast.onmessage = (event) => {
+            if (event && event.data) {
+              this.handleIncomingMessage(event.data);
+            }
+          };
+        }
+      }
+    } catch(e) {}
+  }
+
   connectWebSocket(onSuccess = null, onFallback = null) {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
 
+    this.updateBroadcastChannel();
+
     const loc = window.location;
     const urlParams = new URLSearchParams(loc.search);
     const paramServer = urlParams.get('server') || urlParams.get('signal');
     const storedServer = localStorage.getItem('swc_backend_url') || localStorage.getItem('teacherServerHost');
 
-    // On GitHub Pages or static HTTPS hosting: default directly to Zero-Cloud Public Broker
+    // On GitHub Pages or static HTTPS hosting: default directly to Zero-Cloud Public Relay
     const isStaticHosted = loc.hostname.includes('github.io') || loc.hostname.includes('vercel.app') || loc.protocol === 'file:';
 
     if (paramServer) {
       this.serverUrl = this.sanitizeUrl(paramServer);
+      this.isChannelMode = false;
       this.isMqttMode = false;
       this.isWsMode = true;
     } else if (storedServer && !isStaticHosted) {
       this.serverUrl = this.sanitizeUrl(storedServer);
+      this.isChannelMode = false;
       this.isMqttMode = false;
       this.isWsMode = true;
     } else if (isStaticHosted || !storedServer) {
-      // Free public broker
-      this.serverUrl = this.PUBLIC_BROKERS[this.activeBrokerIndex % this.PUBLIC_BROKERS.length];
-      this.isMqttMode = true;
+      const relay = this.PUBLIC_RELAYS[this.activeRelayIndex % this.PUBLIC_RELAYS.length];
+      this.serverUrl = relay.getUrl(this.currentRoomCode);
+      this.isChannelMode = (relay.mode === 'channel');
+      this.isMqttMode = (relay.mode === 'mqtt');
       this.isWsMode = false;
     } else {
       const wsProtocol = loc.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsPort = loc.port ? `:${loc.port}` : '';
       this.serverUrl = `${wsProtocol}//${loc.hostname}${wsPort}/ws`;
+      this.isChannelMode = false;
       this.isMqttMode = false;
       this.isWsMode = true;
     }
 
-    console.log(`[Signaling] Connecting (Mode: ${this.isMqttMode ? 'Zero-Cloud Public Broker' : 'Local WS'}):`, this.serverUrl);
+    console.log(`[Signaling] Connecting (${this.getTransportLabel()}):`, this.serverUrl);
 
     try {
       if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
@@ -292,21 +363,23 @@ class SignalingManager {
       this.ws = this.isMqttMode
         ? new WebSocket(this.serverUrl, 'mqtt')
         : new WebSocket(this.serverUrl);
-      this.ws.binaryType = 'arraybuffer';
+
+      if (this.isMqttMode) {
+        this.ws.binaryType = 'arraybuffer';
+      }
 
       const connectTimeout = setTimeout(() => {
         if (!this.isConnected && this.ws && this.ws.readyState !== WebSocket.OPEN) {
           console.warn('[Signaling] Connection timed out on:', this.serverUrl);
           try { this.ws.close(); } catch(e) {}
-          if (this.isMqttMode) {
-            // Failover to secondary broker
-            this.activeBrokerIndex++;
+          if (this.isChannelMode || this.isMqttMode) {
+            this.activeRelayIndex++;
             this.connectWebSocket(onSuccess, onFallback);
           } else if (onFallback) {
             onFallback();
           }
         }
-      }, 4500);
+      }, 4000);
 
       this.ws.onopen = () => {
         if (this.isMqttMode) {
@@ -314,24 +387,39 @@ class SignalingManager {
           this.ws.send(connPacket);
         } else {
           clearTimeout(connectTimeout);
+          if (this.offlineDebounceTimer) {
+            clearTimeout(this.offlineDebounceTimer);
+            this.offlineDebounceTimer = null;
+          }
           this.isConnected = true;
           this.reconnectAttempts = 0;
+          this.isReconnecting = false;
           this.startHeartbeat();
-          console.log('[Signaling] Local WebSocket connected:', this.serverUrl);
+          console.log(`[Signaling] ${this.getTransportLabel()} connected successfully:`, this.serverUrl);
 
           if (this.onServerStatusChange) {
-            this.onServerStatusChange(true, 'Local Classroom Server');
+            this.onServerStatusChange(true, this.getTransportLabel());
           }
 
           if (this.role === 'teacher' && this.currentRoomCode) {
-            this.send({
-              type: 'room_create',
-              teacherName: this.teacherName || 'Professor',
-              roomCode: this.currentRoomCode,
-              authToken: this.teacherToken
-            });
+            if (this.isWsMode) {
+              this.send({
+                type: 'room_create',
+                teacherName: this.teacherName || 'Professor',
+                roomCode: this.currentRoomCode,
+                authToken: this.teacherToken
+              });
+            }
+            if (this.onRoomCreated) {
+              this.onRoomCreated({
+                type: 'room_created',
+                roomCode: this.currentRoomCode,
+                teacherId: this.clientId
+              });
+            }
           }
 
+          this.flushSendQueue();
           if (onSuccess) onSuccess();
         }
       };
@@ -343,7 +431,6 @@ class SignalingManager {
             packets.forEach((p) => {
               if (p.type === 'connack') {
                 clearTimeout(connectTimeout);
-                // Cancel pending "Offline" debounce — we reconnected before it fired
                 if (this.offlineDebounceTimer) {
                   clearTimeout(this.offlineDebounceTimer);
                   this.offlineDebounceTimer = null;
@@ -351,16 +438,15 @@ class SignalingManager {
                 this.isConnected = true;
                 this.reconnectAttempts = 0;
                 this.isReconnecting = false;
-                console.log('[Signaling] Serverless Public Broker connected successfully! Broker:', this.serverUrl);
+                console.log('[Signaling] MQTT broker connected successfully! Broker:', this.serverUrl);
                 this.startHeartbeat();
 
-                // Subscribe to room topics if room code is known
                 if (this.currentRoomCode) {
                   this._subscribeRoomTopics();
                 }
 
                 if (this.onServerStatusChange) {
-                  this.onServerStatusChange(true, 'Signaling Connected');
+                  this.onServerStatusChange(true, this.getTransportLabel());
                 }
 
                 if (this.role === 'teacher' && this.currentRoomCode) {
@@ -373,6 +459,7 @@ class SignalingManager {
                   }
                 }
 
+                this.flushSendQueue();
                 if (onSuccess) onSuccess();
               } else if (p.type === 'publish') {
                 try {
@@ -387,7 +474,7 @@ class SignalingManager {
           return;
         }
 
-        // Standard WS mode
+        // Standard JSON mode (Channel mode or Local WS mode)
         if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
           if (this.onBinaryMedia) {
             this.onBinaryMedia(event.data);
@@ -409,8 +496,10 @@ class SignalingManager {
         this.stopHeartbeat();
         console.warn('[Signaling] Connection closed.');
 
-        // Debounce "Offline" UI update — MQTT brokers naturally close the WS on each keepalive
-        // cycle. We wait 3s before showing "Offline" so a quick silent reconnect keeps the badge green.
+        if (this.isChannelMode || this.isMqttMode) {
+          this.activeRelayIndex++;
+        }
+
         if (this.offlineDebounceTimer) clearTimeout(this.offlineDebounceTimer);
         this.offlineDebounceTimer = setTimeout(() => {
           if (!this.isConnected && this.onServerStatusChange) {
@@ -428,8 +517,8 @@ class SignalingManager {
 
     } catch (e) {
       console.warn('[Signaling] Socket init error:', e);
-      if (this.isMqttMode) {
-        this.activeBrokerIndex++;
+      if (this.isChannelMode || this.isMqttMode) {
+        this.activeRelayIndex++;
       }
       this.scheduleReconnect();
     }
@@ -760,7 +849,16 @@ class SignalingManager {
     messageObj.roomCode = messageObj.roomCode || this.currentRoomCode;
     messageObj.timestamp = messageObj.timestamp || Date.now();
 
+    // Broadcast locally to any same-browser tabs (Teacher tab <-> Student tab)
+    if (this.localBroadcast) {
+      try {
+        this.localBroadcast.postMessage(messageObj);
+      } catch (e) {}
+    }
+
     if (!this.isConnected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.sendQueue.push(messageObj);
+      if (this.sendQueue.length > 60) this.sendQueue.shift();
       return false;
     }
 
@@ -803,9 +901,14 @@ class SignalingManager {
       return true;
     }
 
-    // Standard WebSocket mode
-    this.ws.send(JSON.stringify(messageObj));
-    return true;
+    // Standard WebSocket & Channel mode (Port 443 Relay / Local WS)
+    try {
+      this.ws.send(JSON.stringify(messageObj));
+      return true;
+    } catch (e) {
+      this.sendQueue.push(messageObj);
+      return false;
+    }
   }
 
   sendMessage(messageObj) {
@@ -815,8 +918,13 @@ class SignalingManager {
   handleIncomingMessage(msg) {
     if (!msg || !msg.type) return;
 
-    // Filter out our own messages
+    // Filter out our own reflected messages
     if (msg.senderId && msg.senderId === this.clientId) {
+      return;
+    }
+
+    // Filter out private messages meant for another peer
+    if (msg.recipientId && msg.recipientId !== this.clientId && msg.recipientId !== 'broadcast' && msg.recipientId !== 'all') {
       return;
     }
 
@@ -937,11 +1045,7 @@ class SignalingManager {
 
       case 'request_stream':
         if (this.role === 'teacher' && this.activeStream) {
-          const pc = window.webrtc && window.webrtc.peerConnections.get(msg.senderId);
-          if (pc && pc.connectionState === 'connected') {
-            console.log(`[Signaling] Student ${msg.senderId} requested stream but is already connected. Skipping offer.`);
-            return;
-          }
+          console.log(`[Signaling] Dispatching presentation stream offer to student ${msg.senderId}`);
           this.initiateWebRtcOffer(msg.senderId);
         }
         break;

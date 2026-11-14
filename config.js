@@ -79,11 +79,15 @@
       } catch (e) {}
     },
 
-    // STUN Servers (fast Google & Cloudflare STUN for NAT traversal; local host candidates used for LAN/Ethernet)
+    // STUN & TURN Servers (LAN host candidates prioritized first; fast Google STUN & Metered OpenRelay for NAT/AP traversal)
     DEFAULT_ICE_SERVERS: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun.cloudflare.com:3478' }
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'stun:stun.relay.metered.ca:80' },
+      { urls: 'turn:standard.relay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:standard.relay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:standard.relay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
     ],
 
     updateIceServersFromBackend: function (servers) {

@@ -64,7 +64,7 @@ class WebRTCManager {
     this.connectionStates.set(peerId, 'new');
 
     // Configure transceivers upfront so SDP contains m=video and m=audio lines
-    // If local screen/audio tracks already exist, bind them synchronously into transceivers!
+    // Teacher/Initiator transmits screen and audio to students (sendonly direction)
     try {
       if (pc.addTransceiver && isInitiator) {
         let hasVideo = false;
@@ -75,7 +75,7 @@ class WebRTCManager {
           stream.getTracks().forEach((track) => {
             if (track.kind === 'video' && !hasVideo) {
               if ('contentHint' in track) track.contentHint = 'detail';
-              const t = pc.addTransceiver(track, { direction: 'sendrecv', streams: [stream] });
+              const t = pc.addTransceiver(track, { direction: 'sendonly', streams: [stream] });
               try {
                 const params = t.sender.getParameters();
                 if (params.encodings && params.encodings.length > 0) {
@@ -85,15 +85,15 @@ class WebRTCManager {
               } catch(e) {}
               hasVideo = true;
             } else if (track.kind === 'audio' && !hasAudio) {
-              pc.addTransceiver(track, { direction: 'sendrecv', streams: [stream] });
+              pc.addTransceiver(track, { direction: 'sendonly', streams: [stream] });
               hasAudio = true;
             }
           });
         });
 
         // Add empty transceivers as placeholders if screen/mic hasn't started yet
-        if (!hasVideo) pc.addTransceiver('video', { direction: 'sendrecv' });
-        if (!hasAudio) pc.addTransceiver('audio', { direction: 'sendrecv' });
+        if (!hasVideo) pc.addTransceiver('video', { direction: 'sendonly' });
+        if (!hasAudio) pc.addTransceiver('audio', { direction: 'sendonly' });
       }
     } catch (e) {
       console.warn(`[WebRTC] Transceiver setup note for peer ${peerId}:`, e);
@@ -243,11 +243,11 @@ class WebRTCManager {
   async createOffer(peerId, gatherComplete = false) {
     const pc = this.getOrCreateConnection(peerId, true);
 
-    const offer = await pc.createOffer({
-      offerToReceiveAudio: true,
-      offerToReceiveVideo: true
-    });
+    const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+
+    // Wait for initial host candidates (LAN / Wi-Fi / Ethernet local IPs) to bake into SDP
+    await this.waitForInitialCandidates(pc, 400);
 
     if (gatherComplete) {
       await this.waitForIceGathering(pc);
@@ -275,8 +275,20 @@ class WebRTCManager {
     await pc.setRemoteDescription(desc);
     await this.flushCandidateBuffer(peerId);
 
+    // Ensure transceivers on student are recvonly for incoming teacher screen/audio
+    try {
+      pc.getTransceivers().forEach((t) => {
+        if (t.direction !== 'recvonly') {
+          t.direction = 'recvonly';
+        }
+      });
+    } catch (e) {}
+
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
+
+    // Wait for initial host candidates (LAN / Wi-Fi / Ethernet local IPs) to bake into SDP
+    await this.waitForInitialCandidates(pc, 400);
 
     if (gatherComplete) {
       await this.waitForIceGathering(pc);
@@ -305,7 +317,7 @@ class WebRTCManager {
    * Adds an ICE candidate received via trickle signaling or buffers it if remoteDescription is not set
    */
   async addIceCandidate(peerId, candidate) {
-    if (!candidate || !candidate.candidate) return;
+    if (!candidate || (!candidate.candidate && candidate.candidate !== '')) return;
     const pc = this.peerConnections.get(peerId);
 
     // If PC doesn't exist yet or remoteDescription is not set, buffer candidate!
@@ -314,12 +326,12 @@ class WebRTCManager {
         this.iceCandidateBuffers.set(peerId, []);
       }
       this.iceCandidateBuffers.get(peerId).push(candidate);
-      console.log(`[WebRTC] Buffered early ICE candidate for peer ${peerId}`);
       return;
     }
 
     try {
-      await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      const iceCand = (candidate instanceof RTCIceCandidate) ? candidate : new RTCIceCandidate(candidate);
+      await pc.addIceCandidate(iceCand);
     } catch (e) {
       console.warn(`[WebRTC] Error adding ICE candidate for peer ${peerId}:`, e);
     }
@@ -514,9 +526,12 @@ class WebRTCManager {
   startDisconnectWatchdog(peerId) {
     if (this.watchdogIntervals.has(peerId)) return;
     const timer = setTimeout(() => {
-      console.warn(`[WebRTC] Watchdog triggered for disconnected peer: ${peerId}. Triggering ICE restart.`);
-      this.attemptIceRestart(peerId);
-    }, 5000);
+      const pc = this.peerConnections.get(peerId);
+      if (pc && pc.iceConnectionState === 'disconnected') {
+        console.warn(`[WebRTC] Watchdog triggered for disconnected peer: ${peerId}. Triggering ICE restart.`);
+        this.attemptIceRestart(peerId);
+      }
+    }, 15000);
     this.watchdogIntervals.set(peerId, timer);
   }
 
