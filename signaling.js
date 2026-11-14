@@ -455,8 +455,10 @@ class SignalingManager {
     if (this.role === 'teacher') {
       const subTeacher = this._buildMqttSubscribe(this.packetIdSeq++, `${prefix}/teacher`);
       const subBcast = this._buildMqttSubscribe(this.packetIdSeq++, `${prefix}/broadcast`);
+      const subDirect = this._buildMqttSubscribe(this.packetIdSeq++, `${prefix}/student_${this.clientId}`);
       this.ws.send(subTeacher);
       this.ws.send(subBcast);
+      this.ws.send(subDirect);
       console.log(`[Signaling] Subscribed teacher to topics for room ${this.currentRoomCode}`);
     } else {
       const subStudent = this._buildMqttSubscribe(this.packetIdSeq++, `${prefix}/student_${this.clientId}`);
@@ -701,9 +703,10 @@ class SignalingManager {
         console.log(`[Signaling] Peer ${studentId} is already connected and streaming. Skipping redundant offer.`);
         return;
       }
-      if (existingPc.signalingState !== 'stable') {
-        console.log(`[Signaling] Peer ${studentId} signalingState is '${existingPc.signalingState}'. Postponing offer.`);
-        return;
+      // If previous negotiation stalled or connection dropped, clean it up to start fresh
+      if (existingPc.signalingState !== 'stable' || existingPc.connectionState === 'failed' || existingPc.connectionState === 'closed') {
+        console.log(`[Signaling] Peer ${studentId} connection state (${existingPc.connectionState}/${existingPc.signalingState}). Resetting for fresh offer.`);
+        webrtc.closeConnection(studentId);
       }
     }
 
@@ -779,17 +782,28 @@ class SignalingManager {
       if (messageObj.type === 'room_create') {
         this._subscribeRoomTopics();
         return true;
-      } else if (messageObj.type === 'room_join_request') {
+      }
+
+      // 1. Universal Broadcast Messages (delivered to everyone in room: chat, announcements, hand raise, reactions, whiteboard)
+      const broadcastTypes = [
+        'chat_message', 'announcement', 'raise_hand', 'reaction',
+        'wb_stroke', 'wb_clear', 'permission_change',
+        'stream_started', 'stream_stopped', 'room_terminated'
+      ];
+
+      if (broadcastTypes.includes(messageObj.type)) {
+        topic = `${prefix}/broadcast`;
+      }
+      // 2. Student-to-Teacher Messages (join requests, WebRTC answers/candidates, request_stream, student_left, etc.)
+      else if (this.role === 'student') {
         topic = `${prefix}/teacher`;
-      } else if (messageObj.recipientId) {
-        if (messageObj.recipientId === 'teacher' || (typeof messageObj.recipientId === 'string' && messageObj.recipientId.startsWith('swc-teach'))) {
-          topic = `${prefix}/teacher`;
-        } else {
-          topic = `${prefix}/student_${messageObj.recipientId}`;
-        }
-      } else if (this.role === 'student') {
-        topic = `${prefix}/teacher`;
-      } else {
+      }
+      // 3. Teacher-to-Student Direct Messages (join approvals/rejections, kicks, WebRTC offers/candidates)
+      else if (messageObj.recipientId && messageObj.recipientId !== 'broadcast' && messageObj.recipientId !== 'teacher') {
+        topic = `${prefix}/student_${messageObj.recipientId}`;
+      }
+      // 4. Default / Fallback Broadcast
+      else {
         topic = `${prefix}/broadcast`;
       }
 
@@ -847,6 +861,7 @@ class SignalingManager {
 
       case 'room_join_approved':
         this.currentRoomCode = msg.roomCode;
+        this.teacherId = msg.teacherId || msg.senderId;
         if (this.studentJoinInterval) {
           clearInterval(this.studentJoinInterval);
           this.studentJoinInterval = null;

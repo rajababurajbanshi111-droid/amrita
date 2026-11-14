@@ -1592,7 +1592,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       signaling.send({
         type: 'signal_answer',
         recipientId: msg.senderId,
-        payload: answer
+        payload: {
+          type: answer.type || 'answer',
+          sdp: answer.sdp
+        }
       });
 
       // PROTECT TEACHER & RESPECT ADMISSION GUARD: Do NOT switch view until explicitly approved
@@ -1899,6 +1902,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         console.log('[App] Sent request_stream to professor on stream start');
       }
+    }
+  };
+
+  // Whiteboard Dual-Channel Fallback Hooks (Signaling Broker Mode)
+  signaling.onWbStroke = (msg) => {
+    if (msg && msg.senderId !== signaling.clientId && msg.payload) {
+      if (typeof whiteboard !== 'undefined' && whiteboard) whiteboard.renderRemoteStroke(msg.payload);
+      if (typeof overlayWhiteboard !== 'undefined' && overlayWhiteboard) overlayWhiteboard.renderRemoteStroke(msg.payload);
+    }
+  };
+  signaling.onWbClear = (msg) => {
+    if (msg && msg.senderId !== signaling.clientId) {
+      if (typeof whiteboard !== 'undefined' && whiteboard) whiteboard.clearCanvas(false);
+      if (typeof overlayWhiteboard !== 'undefined' && overlayWhiteboard) overlayWhiteboard.clearCanvas(false);
     }
   };
 

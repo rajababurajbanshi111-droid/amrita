@@ -261,7 +261,12 @@ class WebRTCManager {
    * Flushes buffered early trickle ICE candidates and bakes collected candidates into answer SDP.
    */
   async handleOfferAndCreateAnswer(peerId, offerSdp, gatherComplete = false) {
-    const pc = this.getOrCreateConnection(peerId, false);
+    let pc = this.peerConnections.get(peerId);
+    if (pc && pc.signalingState !== 'stable') {
+      console.log(`[WebRTC] Peer ${peerId} in non-stable state (${pc.signalingState}). Re-creating connection for new offer.`);
+      this.closeConnection(peerId);
+    }
+    pc = this.getOrCreateConnection(peerId, false);
 
     const desc = new RTCSessionDescription({
       type: offerSdp.type,
@@ -300,7 +305,7 @@ class WebRTCManager {
    * Adds an ICE candidate received via trickle signaling or buffers it if remoteDescription is not set
    */
   async addIceCandidate(peerId, candidate) {
-    if (!candidate) return;
+    if (!candidate || !candidate.candidate) return;
     const pc = this.peerConnections.get(peerId);
 
     // If PC doesn't exist yet or remoteDescription is not set, buffer candidate!
