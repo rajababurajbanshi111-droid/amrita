@@ -929,22 +929,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       startSessionTimer();
       if (signaling.pendingRemoteStream) {
         activateRemoteVideoStream(signaling.pendingRemoteStream);
-      } else if (signaling.isWsMode) {
-        signaling.sendMessage({
+      } else if (signaling && signaling.isConnected) {
+        signaling.send({
           type: 'request_stream',
           senderId: signaling.clientId,
           roomCode: classroom.sessionCode
         });
-        console.log('[App] Sent request_stream to professor via manual stage entry (WS mode)');
-      } else if (signaling.teacherConn && signaling.teacherConn.open) {
-        try {
-          signaling.teacherConn.send({
-            type: 'request_stream',
-            senderId: signaling.clientId,
-            roomCode: classroom.sessionCode
-          });
-          console.log('[App] Sent request_stream to professor via manual stage entry');
-        } catch(e) {}
+        console.log('[App] Sent request_stream to professor via manual stage entry');
       }
       showToast('Entered Amrita classroom stage!', 'success');
     });
@@ -1319,23 +1310,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       activateRemoteVideoStream(signaling.pendingRemoteStream);
     } else if (studentRemoteVideo && studentRemoteVideo.srcObject) {
       activateRemoteVideoStream(studentRemoteVideo.srcObject);
-    } else if (signaling.isWsMode) {
-      signaling.sendMessage({
+    } else if (signaling && signaling.isConnected) {
+      signaling.send({
         type: 'request_stream',
         senderId: signaling.clientId,
         roomCode: classroom.sessionCode
       });
-      console.log('[App] Sent request_stream to professor on admission approval (WS mode)');
-    } else if (signaling.teacherConn && signaling.teacherConn.open) {
-      // Request active presentation call from professor in case professor started presenting before approval
-      try {
-        signaling.teacherConn.send({
-          type: 'request_stream',
-          senderId: signaling.clientId,
-          roomCode: classroom.sessionCode
-        });
-        console.log('[App] Sent request_stream to professor on admission approval');
-      } catch(e) {}
+      console.log('[App] Sent request_stream to professor on admission approval');
     }
   };
 
@@ -1852,22 +1833,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       showToast('Presenter started screen sharing!', 'info');
       if (signaling.pendingRemoteStream) {
         activateRemoteVideoStream(signaling.pendingRemoteStream);
-      } else if (signaling.isWsMode) {
-        signaling.sendMessage({
+      } else if (signaling && signaling.isConnected) {
+        signaling.send({
           type: 'request_stream',
           senderId: signaling.clientId,
           roomCode: classroom.sessionCode
         });
-        console.log('[App] Sent request_stream to professor via manual stage entry (WS mode)');
-      } else if (signaling.teacherConn && signaling.teacherConn.open) {
-        try {
-          signaling.teacherConn.send({
-            type: 'request_stream',
-            senderId: signaling.clientId,
-            roomCode: classroom.sessionCode
-          });
-          console.log('[App] Sent request_stream to professor');
-        } catch(e) {}
+        console.log('[App] Sent request_stream to professor on stream start');
       }
     }
   };
@@ -2054,7 +2026,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       headerStatusText.textContent = m.classification.label;
       headerLatencyPill.style.display = 'flex';
       headerLatencyVal.textContent = `${m.rttMs}ms`;
-    } else if (classroom.isApproved && (currentStreamEngine === 'sfu' || (signaling.teacherConn && signaling.teacherConn.open))) {
+    } else if (classroom.isApproved && (currentStreamEngine === 'sfu' || (signaling && signaling.isConnected))) {
       headerStatusDot.className = 'status-dot active';
       headerStatusText.textContent = currentStreamEngine === 'sfu' ? 'DataChannel Relay' : 'Classroom Connected';
       headerLatencyPill.style.display = 'none';
@@ -2129,9 +2101,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('wbLineWidth').addEventListener('input', (e) => whiteboard.setLineWidth(parseInt(e.target.value, 10)));
 
   // --- 16. Auto-Discovery & Initial Bootstrapping ---
-  signaling.onServerStatusChange = (isOnline) => {
+  signaling.onServerStatusChange = (isOnline, serverLabel) => {
     if (isOnline) {
-      appModeBadge.textContent = 'Signaling Connected';
+      appModeBadge.textContent = serverLabel || 'Signaling Connected';
       appModeBadge.style.color = 'var(--accent-green)';
       appModeBadge.style.borderColor = 'var(--accent-green)';
       showToast('Connected to Classroom Signaling', 'success');

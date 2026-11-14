@@ -297,10 +297,6 @@ class WebRTCManager {
    */
   async addIceCandidate(peerId, candidate) {
     if (!candidate) return;
-    if (candidate.type === 'relay') return;
-    if (typeof candidate.candidate === 'string' && candidate.candidate.includes('typ relay')) {
-      return;
-    }
     const pc = this.peerConnections.get(peerId);
 
     // If PC doesn't exist yet or remoteDescription is not set, buffer candidate!
