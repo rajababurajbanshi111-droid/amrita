@@ -1,4 +1,4 @@
-// --- config.js ---
+
 /**
  * SMART WEBRTC CLASSROOM - WebRTC & Network Configuration
  * Production configuration for GitHub Pages & Hosted Node.js Backend.
@@ -14,62 +14,81 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  // Default Hosted Backend URL (configured for production cloud deployment e.g. on Render/Railway)
-  // When hosting your own backend, you can set it here or change it in the browser UI Settings modal
-  const DEFAULT_BACKEND_URL = 'https://smart-classroom-backend.onrender.com';
+  // Production Render Backend
+  const DEFAULT_BACKEND_URL = 'https://smart-webrtc-classroom.onrender.com';
 
   const config = {
     DEFAULT_BACKEND_URL,
 
     /**
-     * Resolves the active backend HTTP/HTTPS URL based on environment:
-     * 1. User manual override stored in localStorage (`swc_backend_url`)
-     * 2. Current origin if running on localhost / custom domain with local server
-     * 3. Production DEFAULT_BACKEND_URL (only if running with custom backend or explicitly enabled)
+     * Resolves the active backend URL:
+     * 1. Manual override from localStorage.
+     * 2. Local Node.js server when running locally.
+     * 3. Render backend for GitHub Pages and production.
      */
     getBackendUrl: function () {
-      if (typeof window === 'undefined') return DEFAULT_BACKEND_URL;
+      if (typeof window === 'undefined') {
+        return DEFAULT_BACKEND_URL;
+      }
 
       try {
         const stored = localStorage.getItem('swc_backend_url');
+
         if (stored && stored.trim()) {
           return stored.trim().replace(/\/+$/, '');
         }
       } catch (e) {}
 
-      // If running locally on Node.js static server or on LAN IP
       if (window.location && window.location.hostname) {
         const host = window.location.hostname.toLowerCase();
-        const isLocal = host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.') || host.startsWith('10.') || host.endsWith('.local');
+
+        const isLocal =
+          host === 'localhost' ||
+          host === '127.0.0.1' ||
+          host.startsWith('192.168.') ||
+          host.startsWith('10.') ||
+          host.endsWith('.local');
+
+        // Local Node.js server
         if (isLocal && window.location.port) {
           return `${window.location.protocol}//${window.location.host}`;
         }
 
-        // On GitHub Pages without custom backend configured: return empty string
-        // so client immediately engages direct serverless P2P WebRTC without 4-second timeout stall!
-        if (host.endsWith('github.io')) {
-          return '';
-        }
+        // GitHub Pages and other hosted production websites
+        return DEFAULT_BACKEND_URL;
       }
 
       return DEFAULT_BACKEND_URL;
     },
 
     /**
-     * Resolves the active WebSocket signaling URL (ws:// or wss://)
+     * Resolves the active WebSocket signaling URL.
+     * HTTPS automatically becomes WSS.
      */
     getWebSocketUrl: function () {
       const httpUrl = this.getBackendUrl();
-      if (!httpUrl || !httpUrl.trim()) return null;
+
+      if (!httpUrl || !httpUrl.trim()) {
+        return null;
+      }
+
       const wsProto = httpUrl.startsWith('https:') ? 'wss:' : 'ws:';
-      const cleanHost = httpUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+
+      const cleanHost = httpUrl
+        .replace(/^https?:\/\//, '')
+        .replace(/\/+$/, '');
+
       return `${wsProto}//${cleanHost}/ws`;
     },
 
     setBackendUrl: function (url) {
       if (!url) return;
+
       try {
-        localStorage.setItem('swc_backend_url', url.trim().replace(/\/+$/, ''));
+        localStorage.setItem(
+          'swc_backend_url',
+          url.trim().replace(/\/+$/, '')
+        );
       } catch (e) {}
     },
 
@@ -79,21 +98,36 @@
       } catch (e) {}
     },
 
-    // STUN & TURN Servers (LAN host candidates prioritized first; fast Google STUN & Metered OpenRelay for NAT/AP traversal)
+    // STUN and TURN Servers
     DEFAULT_ICE_SERVERS: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun.cloudflare.com:3478' },
       { urls: 'stun:stun.relay.metered.ca:80' },
-      { urls: 'turn:standard.relay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:standard.relay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:standard.relay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+      {
+        urls: 'turn:standard.relay.metered.ca:80',
+        username: 'openrelayproject',
+        credential: 'openrelayproject'
+      },
+      {
+        urls: 'turn:standard.relay.metered.ca:443',
+        username: 'openrelayproject',
+        credential: 'openrelayproject'
+      },
+      {
+        urls: 'turn:standard.relay.metered.ca:443?transport=tcp',
+        username: 'openrelayproject',
+        credential: 'openrelayproject'
+      }
     ],
 
     updateIceServersFromBackend: function (servers) {
       if (Array.isArray(servers) && servers.length > 0) {
         this.DEFAULT_ICE_SERVERS = servers;
-        console.log('[Config] Dynamic ICE servers updated from backend:', servers);
+        console.log(
+          '[Config] Dynamic ICE servers updated from backend:',
+          servers
+        );
       }
     },
 
@@ -108,15 +142,15 @@
       APPROVAL_TIMEOUT: 90000
     },
 
-    // File Transfer Chunking & Flow Control Constants
+    // File Transfer Configuration
     FILE_TRANSFER: {
-      CHUNK_SIZE: 16384,              // 16 KB chunks for high reliability across WebRTC DataChannels
-      BUFFER_THRESHOLD: 65536,        // 64 KB threshold for bufferedAmountLow
-      MAX_FILE_SIZE_BYTES: 500 * 1024 * 1024, // 500 MB max file size
+      CHUNK_SIZE: 16384,
+      BUFFER_THRESHOLD: 65536,
+      MAX_FILE_SIZE_BYTES: 500 * 1024 * 1024,
       HASH_ALGORITHM: 'SHA-256'
     },
 
-    // Screen Share Quality Presets (Adaptive Bitrate)
+    // Screen Share Quality Presets
     SCREEN_PRESETS: {
       low: {
         label: 'Low Bandwidth (720p 15 FPS - 800 kbps)',
@@ -148,13 +182,14 @@
       }
     },
 
-    // Honest Connection Classification Labels
+    // Connection Classification Labels
     CONNECTION_TYPES: {
       DIRECT_LAN: {
         code: 'DIRECT_LAN',
         label: 'Direct Local LAN Route',
         badgeClass: 'badge-lan',
-        description: 'Both peers communicate directly over the local network switch/Wi-Fi (lowest latency, zero internet data).'
+        description:
+          'Both peers communicate directly over the local network switch/Wi-Fi (lowest latency, zero internet data).'
       },
       DIRECT_P2P: {
         code: 'DIRECT_P2P',
@@ -172,19 +207,22 @@
         code: 'TURN_RELAY',
         label: 'TURN Encrypted Relay',
         badgeClass: 'badge-turn',
-        description: 'Direct routing blocked by strict firewall/symmetric NAT; media is securely relayed via TURN.'
+        description:
+          'Direct routing blocked by strict firewall/symmetric NAT; media is securely relayed via TURN.'
       },
       PENDING: {
         code: 'PENDING',
         label: 'Connecting WebRTC...',
         badgeClass: 'badge-pending',
-        description: 'Negotiating ICE candidates and establishing peer connection.'
+        description:
+          'Negotiating ICE candidates and establishing peer connection.'
       },
       FAILED: {
         code: 'FAILED',
         label: 'Connection Failed',
         badgeClass: 'badge-failed',
-        description: 'Could not establish media channel. Please check network/firewall permissions.'
+        description:
+          'Could not establish media channel. Please check network/firewall permissions.'
       }
     }
   };
