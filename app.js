@@ -697,6 +697,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   function handleExitSession() {
+    // If student is leaving, notify teacher so roster is cleaned up immediately
+    if (classroom.role === 'student' && signaling.isConnected && signaling.currentRoomCode) {
+      try {
+        signaling.send({
+          type: 'student_left',
+          studentId: signaling.clientId,
+          roomCode: signaling.currentRoomCode,
+          studentName: signaling.studentName || 'Student'
+        });
+      } catch (e) {}
+    }
     if (screenShare.isSharing) screenShare.stopScreenShare();
     classroom.endSession();
     stopSessionTimer();
@@ -1136,6 +1147,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   studentLeaveClassroomBtn.addEventListener('click', () => {
     if (confirm('Leave classroom and return to gateway?')) {
+      // Notify teacher that this student is leaving
+      if (classroom.role === 'student' && signaling.isConnected) {
+        signaling.send({
+          type: 'student_left',
+          studentId: signaling.clientId,
+          roomCode: signaling.currentRoomCode,
+          studentName: signaling.studentName || 'Student'
+        });
+      }
       handleExitSession();
     }
   });
@@ -1534,13 +1554,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   classroom.onStudentLeft = (studentId, isKicked = false) => {
     if (studentId) {
-      sessionAttendance.forEach((rec, key) => {
+      // Remove from all teacher data structures immediately
+      classroom.connectedStudents.delete(studentId);
+      classroom.pendingApprovals.delete(studentId);
+      if (classroom.approvedStudents) classroom.approvedStudents.delete(studentId);
+      // Close any dangling WebRTC peer connection
+      if (window.webrtc) {
+        try { window.webrtc.closeConnection(studentId); } catch (e) {}
+      }
+      // Update attendance record
+      sessionAttendance.forEach((rec) => {
         if (rec.id === studentId) rec.status = isKicked ? 'Removed' : 'Disconnected';
       });
       renderAttendanceTable();
     }
     renderConnectedRoster();
     renderPendingApprovals();
+    if (typeof updateStudentCountKPIs === 'function') updateStudentCountKPIs();
   };
 
   // Teacher handles incoming Trickle Answer from student
@@ -1610,9 +1640,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
 
-  // WebRTC Connection State Listener (Strict Admission Guard - No premature join!)
+  // WebRTC Connection State Listener — auto-cleanup disconnected students from teacher roster
   webrtc.onConnectionStateChange = (peerId, state) => {
     console.log(`[WebRTC] Peer ${peerId} state:`, state);
+
+    // Teacher side: when a student's WebRTC connection drops, remove them from all UI lists
+    if ((state === 'disconnected' || state === 'failed' || state === 'closed') &&
+        classroom.role === 'teacher') {
+      // Update attendance record status
+      if (typeof sessionAttendance !== 'undefined') {
+        sessionAttendance.forEach((rec) => {
+          if (rec.id === peerId) rec.status = 'Disconnected';
+        });
+      }
+      // Remove from connected roster
+      classroom.connectedStudents.delete(peerId);
+      classroom.pendingApprovals.delete(peerId);
+      if (classroom.approvedStudents) classroom.approvedStudents.delete(peerId);
+
+      // Re-render all teacher UI lists
+      if (typeof renderAttendanceTable === 'function') renderAttendanceTable();
+      if (typeof renderConnectedRoster === 'function') renderConnectedRoster();
+      if (typeof renderPendingApprovals === 'function') renderPendingApprovals();
+      if (typeof updateStudentCountKPIs === 'function') updateStudentCountKPIs();
+    }
   };
 
   webrtc.onIceStateChange = (peerId, iceState) => {
@@ -2124,6 +2175,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Dynamically initialize ICE configuration from backend, then connect WebSocket
   signaling.fetchBackendIceConfig().finally(() => {
     signaling.connectWebSocket();
+  });
+
+  // Auto-notify teacher when student closes the browser tab / navigates away
+  window.addEventListener('beforeunload', () => {
+    if (classroom.role === 'student' && signaling.isConnected && signaling.currentRoomCode) {
+      try {
+        signaling.send({
+          type: 'student_left',
+          studentId: signaling.clientId,
+          roomCode: signaling.currentRoomCode,
+          studentName: signaling.studentName || 'Student'
+        });
+      } catch (e) {}
+    }
   });
 
   // Multi-Monitor Responsive Auto-Adjustment Listener

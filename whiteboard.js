@@ -108,9 +108,15 @@ class WhiteboardManager {
 
   getCanvasCoords(e) {
     const rect = this.canvas.getBoundingClientRect();
+    // Scale from CSS display pixels to canvas backing-store pixels
+    const scaleX = this.canvas.width / rect.width;
+    const scaleY = this.canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
     return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
+      x,
+      y,
+      // Normalized percentages for resolution-independent network sync
       xPercent: (e.clientX - rect.left) / rect.width,
       yPercent: (e.clientY - rect.top) / rect.height
     };
@@ -149,10 +155,9 @@ class WhiteboardManager {
 
     // Broadcast stroke vector as normalized percentages for resolution independence
     if (this.router) {
-      const rect = this.canvas.getBoundingClientRect();
       this.router.broadcastWhiteboardStroke({
-        x0: this.prevX / rect.width,
-        y0: this.prevY / rect.height,
+        x0: this.prevX / this.canvas.width,
+        y0: this.prevY / this.canvas.height,
         x1: pos.xPercent,
         y1: pos.yPercent,
         tool: this.tool,

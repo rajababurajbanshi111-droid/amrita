@@ -24,6 +24,8 @@ class SignalingManager {
     this.maxReconnectAttempts = 10;
     this.reconnectTimer = null;
     this.pingInterval = null;
+    this.offlineDebounceTimer = null; // Debounce: don't flash "Offline" on natural MQTT keepalive cycles
+    this.isReconnecting = false;      // Suppress UI flicker during transient MQTT reconnects
 
     // Public WSS Brokers with auto-failover
     this.PUBLIC_BROKERS = [
@@ -119,7 +121,7 @@ class SignalingManager {
     const protoName = new Uint8Array([0, 4, 0x4d, 0x51, 0x54, 0x54]); // 'MQTT'
     const protoLevel = new Uint8Array([4]); // 3.1.1
     const flags = new Uint8Array([2]); // Clean Session
-    const keepAlive = new Uint8Array([0, 30]); // 30s
+    const keepAlive = new Uint8Array([0, 60]); // 60s — avoids broker-side idle disconnect within 30s keepalive window
     const pld = this._encodeMqttStr(clientId);
     const body = this._concatMqtt([protoName, protoLevel, flags, keepAlive, pld]);
     const rem = this._encodeMqttRemLen(body.length);
@@ -350,8 +352,14 @@ class SignalingManager {
             packets.forEach((p) => {
               if (p.type === 'connack') {
                 clearTimeout(connectTimeout);
+                // Cancel pending "Offline" debounce — we reconnected before it fired
+                if (this.offlineDebounceTimer) {
+                  clearTimeout(this.offlineDebounceTimer);
+                  this.offlineDebounceTimer = null;
+                }
                 this.isConnected = true;
                 this.reconnectAttempts = 0;
+                this.isReconnecting = false;
                 console.log('[Signaling] Serverless Public Broker connected successfully! Broker:', this.serverUrl);
                 this.startHeartbeat();
 
@@ -410,10 +418,16 @@ class SignalingManager {
         this.stopHeartbeat();
         console.warn('[Signaling] Connection closed.');
 
-        if (this.onServerStatusChange) {
-          this.onServerStatusChange(false, 'Disconnected');
-        }
+        // Debounce "Offline" UI update — MQTT brokers naturally close the WS on each keepalive
+        // cycle. We wait 3s before showing "Offline" so a quick silent reconnect keeps the badge green.
+        if (this.offlineDebounceTimer) clearTimeout(this.offlineDebounceTimer);
+        this.offlineDebounceTimer = setTimeout(() => {
+          if (!this.isConnected && this.onServerStatusChange) {
+            this.onServerStatusChange(false, 'Disconnected');
+          }
+        }, 3000);
 
+        this.isReconnecting = true;
         this.scheduleReconnect();
       };
 
@@ -890,9 +904,14 @@ class SignalingManager {
         if (this.onSignalCandidate) this.onSignalCandidate(msg);
         break;
 
-      case 'student_left':
-        if (this.onStudentLeft) this.onStudentLeft(msg);
+      case 'student_left': {
+        const leftId = msg.studentId || msg.senderId;
+        // Always remove from approved set so slot can be reused
+        this.approvedStudents.delete(leftId);
+        this.acknowledgedStudents.delete(leftId);
+        if (this.onStudentLeft) this.onStudentLeft(leftId, false);
         break;
+      }
 
       case 'chat_message':
         if (this.onChatMessage) this.onChatMessage(msg);
