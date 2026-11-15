@@ -444,7 +444,7 @@ class WebRTCManager {
               const kind = currentTrack ? currentTrack.kind : null;
               if (kind === track.kind || (t.sender && !currentTrack)) {
                 if (t.sender) {
-                  t.direction = 'sendrecv';
+                  t.direction = 'sendonly';
                   t.sender.replaceTrack(track).catch((err) => {
                     console.warn(`[WebRTC] replaceTrack warning for peer ${peerId}:`, err);
                   });

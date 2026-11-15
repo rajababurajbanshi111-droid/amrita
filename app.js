@@ -1398,18 +1398,20 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // When Teacher approves student -> Teacher initiates offer to student
   // --- Real Attendance Tracking & CSV Export Engine ---
-  const sessionAttendance = new Map(); // studentId -> { id, name, rollNo, joinTime, status }
+  const sessionAttendance = new Map(); // studentId -> { id, name, rollNo, joinTime, status, transport }
 
-  function updateAttendanceRecord(student, status = 'Present') {
+  function updateAttendanceRecord(student, status = 'Present', transport = null) {
     if (!student || !student.id) return;
     const existing = sessionAttendance.get(student.id);
     const joinTime = existing ? existing.joinTime : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const studentTransport = transport || (existing && existing.transport) || ((signaling && signaling.isWsMode) ? 'LAN SFU' : 'P2P / LAN');
     sessionAttendance.set(student.id, {
       id: student.id,
       name: student.name || 'Student',
       rollNo: student.rollNo || (student.clientInfo && student.clientInfo.rollNo) || 'N/A',
       joinTime: joinTime,
-      status: status
+      status: status,
+      transport: studentTransport
     });
     renderAttendanceTable();
   }
@@ -1428,7 +1430,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const filtered = filter ? records.filter(r => (r.rollNo && r.rollNo.toLowerCase().includes(filter)) || (r.name && r.name.toLowerCase().includes(filter))) : records;
 
     if (filtered.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" style="padding: 1.25rem; text-align: center; color: var(--text-muted);">' + 
+      tbody.innerHTML = '<tr><td colspan="6" style="padding: 1.25rem; text-align: center; color: var(--text-muted);">' + 
         (records.length === 0 ? 'No attendance records recorded for this session yet.' : 'No matching records for filter "' + filter + '".') + '</td></tr>';
       return;
     }
@@ -1439,13 +1441,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       tr.style.borderBottom = '1px solid var(--border-subtle)';
       const isPresent = r.status === 'Present';
       tr.innerHTML = `
-        <td style="padding: 0.65rem 0.85rem; font-family: var(--font-mono); font-size: 0.8rem;">#${idx + 1}</td>
+        <td style="padding: 0.65rem 0.85rem; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted);">#${idx + 1}</td>
         <td style="padding: 0.65rem 0.85rem; font-family: var(--font-mono); font-size: 0.82rem; font-weight: 600; color: #FFA6D8;">${r.rollNo}</td>
         <td style="padding: 0.65rem 0.85rem; font-size: 0.85rem; font-weight: 500;">${r.name}</td>
         <td style="padding: 0.65rem 0.85rem; font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-muted);">${r.joinTime}</td>
         <td style="padding: 0.65rem 0.85rem;">
           <span style="font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-weight: 600; background: ${isPresent ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'}; color: ${isPresent ? 'var(--accent-green)' : 'var(--accent-crimson)'}; border: 1px solid ${isPresent ? 'var(--accent-green)' : 'var(--accent-crimson)'};">
             ${r.status}
+          </span>
+        </td>
+        <td style="padding: 0.65rem 0.85rem;">
+          <span style="font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-weight: 600; background: rgba(59,130,246,0.15); color: #60A5FA; border: 1px solid rgba(59,130,246,0.3);">
+            ${r.transport || 'P2P / LAN'}
           </span>
         </td>
       `;
@@ -1459,13 +1466,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (typeof showToast === 'function') showToast('No attendance records to export yet.', 'warning');
       return;
     }
-    const headers = ['Serial No', 'Roll Number', 'Student Name', 'Join Time', 'Status', 'Room Code', 'Timestamp'];
+    const headers = ['Serial No', 'Roll Number', 'Student Name', 'Join Time', 'Status', 'Transport', 'Room Code', 'Timestamp'];
     const rows = records.map((r, i) => [
       i + 1,
       `"${(r.rollNo || '').replace(/"/g, '""')}"`,
       `"${(r.name || '').replace(/"/g, '""')}"`,
       `"${r.joinTime}"`,
       `"${r.status}"`,
+      `"${r.transport || 'P2P / LAN'}"`,
       `"${classroom.sessionCode || 'N/A'}"`,
       `"${new Date().toISOString()}"`
     ]);
@@ -2101,13 +2109,25 @@ document.addEventListener('DOMContentLoaded', async () => {
       headerStatusText.textContent = m.classification.label;
       headerLatencyPill.style.display = 'flex';
       headerLatencyVal.textContent = `${m.rttMs}ms`;
+    } else if (classroom.role === 'teacher' && signaling && signaling.isConnected) {
+      headerStatusDot.className = 'status-dot active';
+      headerStatusText.textContent = signaling.isWsMode ? 'LAN Server Ready' : 'Signaling Online';
+      headerLatencyPill.style.display = 'none';
     } else if (classroom.isApproved && (currentStreamEngine === 'sfu' || (signaling && signaling.isConnected))) {
       headerStatusDot.className = 'status-dot active';
       headerStatusText.textContent = currentStreamEngine === 'sfu' ? 'DataChannel Relay' : 'Classroom Connected';
       headerLatencyPill.style.display = 'none';
+    } else if (classroom.role === 'student' && !classroom.isApproved && signaling && signaling.isConnected) {
+      headerStatusDot.className = 'status-dot connecting';
+      headerStatusText.textContent = 'Admission Pending';
+      headerLatencyPill.style.display = 'none';
     } else if (m.iceConnectionState === 'failed') {
       headerStatusDot.className = 'status-dot error';
       headerStatusText.textContent = 'Failed';
+      headerLatencyPill.style.display = 'none';
+    } else if (signaling && signaling.isConnected) {
+      headerStatusDot.className = 'status-dot active';
+      headerStatusText.textContent = signaling.isWsMode ? 'LAN Server Ready' : 'Signaling Online';
       headerLatencyPill.style.display = 'none';
     } else {
       headerStatusDot.className = 'status-dot';
@@ -2171,6 +2191,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('wbToolHighlighter').addEventListener('click', () => whiteboard.setTool('highlighter'));
   document.getElementById('wbToolLaser').addEventListener('click', () => whiteboard.setTool('laser'));
   document.getElementById('wbToolEraser').addEventListener('click', () => whiteboard.setTool('eraser'));
+  const wbToolText = document.getElementById('wbToolText');
+  if (wbToolText) wbToolText.addEventListener('click', () => whiteboard.setTool('text'));
   document.getElementById('wbClearBtn').addEventListener('click', () => whiteboard.clearCanvas(true));
   document.getElementById('wbColorPicker').addEventListener('input', (e) => whiteboard.setColor(e.target.value));
   document.getElementById('wbLineWidth').addEventListener('input', (e) => whiteboard.setLineWidth(parseInt(e.target.value, 10)));
@@ -2181,11 +2203,19 @@ document.addEventListener('DOMContentLoaded', async () => {
       appModeBadge.textContent = serverLabel || 'Signaling Connected';
       appModeBadge.style.color = 'var(--accent-green)';
       appModeBadge.style.borderColor = 'var(--accent-green)';
+      if (headerStatusText && headerStatusDot) {
+        headerStatusDot.className = 'status-dot active';
+        headerStatusText.textContent = serverLabel || 'Signaling Online';
+      }
       showToast('Connected to Classroom Signaling', 'success');
     } else {
       appModeBadge.textContent = 'Signaling Offline';
       appModeBadge.style.color = 'var(--accent-amber)';
       appModeBadge.style.borderColor = 'var(--accent-amber)';
+      if (headerStatusText && headerStatusDot && (!classroom || !classroom.isApproved)) {
+        headerStatusDot.className = 'status-dot error';
+        headerStatusText.textContent = 'Disconnected';
+      }
     }
   };
 
