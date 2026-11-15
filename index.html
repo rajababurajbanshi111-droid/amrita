@@ -384,6 +384,18 @@
               </div>
             </div>
 
+            <!-- Live Student Spotlight Presentation Banner -->
+            <div id="teacherSpotlightBanner" style="display: none; background: rgba(164, 18, 100, 0.25); border: 1px solid #FFA6D8; border-radius: 8px; padding: 0.65rem 1rem; margin-bottom: 0.75rem; align-items: center; justify-content: space-between;">
+              <div style="display: flex; align-items: center; gap: 0.6rem;">
+                <span style="font-size: 1.3rem;">📺</span>
+                <div>
+                  <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: #FFA6D8; font-weight: 700;">Student Live Presentation (Broadcasting to All)</div>
+                  <div style="font-size: 0.92rem; font-weight: 600; color: #FFFFFF;" id="teacherSpotlightInfo">Presenting: Student Name</div>
+                </div>
+              </div>
+              <button class="btn btn-danger" id="teacherBtnAbortSpotlight" style="font-size: 0.75rem; padding: 0.35rem 0.85rem; font-weight: 600;">⏹ Abort Student Share</button>
+            </div>
+
             <!-- Screen Preview Stage -->
             <div class="screen-stage-wrapper" id="teacherStageWrapper">
               <video id="teacherScreenPreview" class="stage-video" autoplay playsinline muted></video>
@@ -851,6 +863,15 @@
           </div>
         </div>
 
+        <!-- Student Presenter Active Banner (when this student is presenting) -->
+        <div id="studentPresenterBar" style="display: none; background: rgba(16, 185, 129, 0.2); border: 1px solid var(--accent-green); border-radius: 6px; padding: 0.5rem 1rem; margin: 0.5rem 1rem; align-items: center; justify-content: space-between; z-index: 20;">
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span class="status-dot active"></span>
+            <span style="font-size: 0.85rem; color: var(--accent-green); font-weight: 600;">🔴 You are sharing your screen with the class</span>
+          </div>
+          <button class="btn btn-danger" id="studentStopMyScreenBtn" style="padding: 0.25rem 0.65rem; font-size: 0.75rem;">Stop Sharing</button>
+        </div>
+
         <!-- Video Viewport -->
         <div class="student-video-viewport" id="studentVideoViewport">
           <video id="studentRemoteVideo" class="student-remote-video" autoplay playsinline webkit-playsinline muted></video>
@@ -863,13 +884,16 @@
             </div>
             <h3 class="u-s85">Connected to Classroom</h3>
             <p class="u-s86">
-              You are admitted! Waiting for your teacher to begin screen sharing. When presentation starts, video will appear automatically.
+              You are admitted! Waiting for your teacher or peer to begin screen sharing. When presentation starts, video will appear automatically.
             </p>
           </div>
         </div>
 
         <!-- Floating Video Control Bar -->
         <div class="student-control-bar">
+          <button class="student-bar-btn" id="studentShareScreenBtn" title="Share Screen with Class" style="display: none; color: var(--accent-cyan);">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+          </button>
           <button class="student-bar-btn" id="studentToggleAudioBtn" title="Toggle Stream Audio">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
           </button>
@@ -882,6 +906,17 @@
           <button class="student-bar-btn danger" id="studentLeaveClassroomBtn" title="Leave Classroom">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
           </button>
+        </div>
+
+        <!-- Floating Student Spotlight Request Modal (Shown when teacher requests screen share) -->
+        <div id="studentSpotlightPrompt" style="display: none; position: fixed; top: 30px; left: 50%; transform: translateX(-50%); background: #1E1226; border: 2px solid #FFA6D8; border-radius: 12px; padding: 1.25rem 1.75rem; z-index: 999999; box-shadow: 0 10px 30px rgba(0,0,0,0.85); text-align: center; max-width: 90%; width: 440px;">
+          <div style="font-size: 1.8rem; margin-bottom: 0.35rem;">📺</div>
+          <div style="font-weight: 700; font-size: 1.05rem; color: #FFFFFF; margin-bottom: 0.3rem;">Professor Requested Your Screen</div>
+          <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1.25rem; line-height: 1.5;">The professor has requested you to share your screen. It will be broadcast live to the professor and all students.</p>
+          <div style="display: flex; gap: 0.75rem; justify-content: center;">
+            <button id="btnStudentAcceptSpotlight" class="btn btn-primary" style="padding: 0.45rem 1.15rem; font-size: 0.85rem; font-weight: 600;">Start Screen Share</button>
+            <button id="btnStudentDeclineSpotlight" class="btn btn-secondary" style="padding: 0.45rem 1rem; font-size: 0.85rem;">Decline</button>
+          </div>
         </div>
       </div>
 

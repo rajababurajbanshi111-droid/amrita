@@ -224,9 +224,9 @@ class ScreenShareManager {
    */
   startSfuRelayStream() {
     if (!this.signalingManager || !this.activeStream) return;
-    // In Serverless Public Broker mode, screen streaming is 100% direct WebRTC peer-to-peer.
-    // Do NOT send raw binary frames to MQTT broker as it violates MQTT 3.1.1 framing!
-    if (this.signalingManager.isMqttMode) return;
+    // In Serverless PeerJS / WebRTC mode, screen streaming is 100% direct WebRTC peer-to-peer.
+    // Only stream raw binary canvas frames if connected to a local LAN WebSocket server (isWsMode).
+    if (!this.signalingManager.isWsMode) return;
     this.stopSfuRelayStream();
 
     try {
