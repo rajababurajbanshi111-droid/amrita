@@ -408,6 +408,32 @@ class SecurityManager {
       }
     }
   }
+
+  /**
+   * Encodes an ArrayBuffer into a Base64 string for universal firewall transport
+   */
+  static arrayBufferToBase64(buffer) {
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+
+  /**
+   * Decodes a Base64 string back into an ArrayBuffer
+   */
+  static base64ToArrayBuffer(base64) {
+    const binary = atob(base64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes.buffer;
+  }
 }
 
 // Global exposure

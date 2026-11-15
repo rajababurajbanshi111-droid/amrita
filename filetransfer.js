@@ -97,12 +97,15 @@ class FileTransferManager {
 
     let sent = false;
     if (this.webrtcManager) {
-      sent = targetPeerId
-        ? this.webrtcManager.sendData(JSON.stringify(offerPacket), targetPeerId)
-        : this.webrtcManager.sendData(JSON.stringify(offerPacket));
+      try {
+        sent = targetPeerId
+          ? this.webrtcManager.sendData(JSON.stringify(offerPacket), targetPeerId)
+          : this.webrtcManager.sendData(JSON.stringify(offerPacket));
+      } catch(e) {}
     }
 
-    if (!sent && this.signalingManager && this.signalingManager.isConnected) {
+    // Always ensure signaling delivery to reach every connected student across any device/router
+    if (this.signalingManager && this.signalingManager.isConnected) {
       this.signalingManager.send({
         type: 'file_control',
         recipientId: targetPeerId,
@@ -120,7 +123,27 @@ class FileTransferManager {
   }
 
   /**
-   * Handles control packets (offer, accept, reject, cancel)
+   * Helper to resolve active DataChannel across WebRTC and PeerJS signaling connections
+   */
+  getDataChannel(peerId) {
+    if (this.webrtcManager && this.webrtcManager.dataChannels && this.webrtcManager.dataChannels.has(peerId)) {
+      const ch = this.webrtcManager.dataChannels.get(peerId);
+      if (ch && ch.readyState === 'open') return ch;
+    }
+    if (this.signalingManager) {
+      if (this.signalingManager.studentConnections && this.signalingManager.studentConnections.has(peerId)) {
+        const conn = this.signalingManager.studentConnections.get(peerId);
+        if (conn && conn.dataChannel && conn.dataChannel.readyState === 'open') return conn.dataChannel;
+      }
+      if (this.signalingManager.teacherConn && this.signalingManager.teacherConn.dataChannel && this.signalingManager.teacherConn.dataChannel.readyState === 'open') {
+        return this.signalingManager.teacherConn.dataChannel;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Handles control packets (offer, accept, reject, cancel, chunk, complete)
    */
   handleControlPacket(peerId, packet) {
     switch (packet.type) {
@@ -130,6 +153,10 @@ class FileTransferManager {
 
       case 'file_accept':
         this.startChunkStreaming(packet.fileId, peerId);
+        break;
+
+      case 'file_chunk':
+        this.handleFallbackChunk(peerId, packet);
         break;
 
       case 'file_reject':
@@ -143,6 +170,30 @@ class FileTransferManager {
       case 'file_complete':
         this.verifyAndFinalizeIncoming(packet.fileId);
         break;
+    }
+  }
+
+  /**
+   * Handles incoming fallback chunk delivered via signaling relay
+   */
+  handleFallbackChunk(peerId, packet) {
+    const transfer = this.incomingTransfers.get(packet.fileId);
+    if (!transfer) return;
+    try {
+      const chunkBuf = (typeof SecurityManager !== 'undefined' && SecurityManager.base64ToArrayBuffer)
+        ? SecurityManager.base64ToArrayBuffer(packet.data)
+        : null;
+      if (!chunkBuf) return;
+      if (!transfer.chunks) transfer.chunks = [];
+      transfer.chunks[packet.chunkIndex] = chunkBuf;
+      transfer.receivedBytes = (transfer.receivedBytes || 0) + chunkBuf.byteLength;
+      const totalChunks = (transfer.meta && transfer.meta.totalChunks) || 1;
+      const percent = Math.min(100, Math.round((transfer.chunks.filter(Boolean).length / totalChunks) * 100));
+      if (this.onTransferProgress) {
+        this.onTransferProgress(packet.fileId, 'inbound', percent, 0, 0);
+      }
+    } catch(e) {
+      console.warn('[FileTransfer] Error handling fallback chunk:', e);
     }
   }
 
@@ -250,23 +301,20 @@ class FileTransferManager {
     console.log(`[FileTransfer] Streaming chunks for file: ${transfer.meta.name} to ${targetPeerId}`);
 
     const file = transfer.file;
-    const channel = this.webrtcManager.dataChannels.get(targetPeerId);
-
-    if (!channel || channel.readyState !== 'open') {
-      this.handleTransferError(fileId, 'outbound', 'DataChannel disconnected during transfer.');
-      return;
-    }
+    const channel = this.getDataChannel(targetPeerId);
 
     const totalChunks = transfer.totalChunks;
     let chunkIndex = 0;
 
     // Helper: wait for buffer to drain when backpressure occurs
-    const waitForBufferDrain = () => {
+    const waitForBufferDrain = (ch) => {
       return new Promise((resolve) => {
-        channel.onbufferedamountlow = () => {
-          channel.onbufferedamountlow = null;
+        if (!ch || ch.bufferedAmount <= this.bufferThreshold) return resolve();
+        ch.onbufferedamountlow = () => {
+          ch.onbufferedamountlow = null;
           resolve();
         };
+        setTimeout(resolve, 150);
       });
     };
 
@@ -276,36 +324,53 @@ class FileTransferManager {
         return;
       }
 
-      // Check DataChannel backpressure
-      if (channel.bufferedAmount > this.bufferThreshold) {
-        await waitForBufferDrain();
-      }
-
       const start = chunkIndex * this.chunkSize;
       const end = Math.min(start + this.chunkSize, file.size);
       const sliceBlob = file.slice(start, end);
       const chunkBuffer = await sliceBlob.arrayBuffer();
 
-      // Header: 16 bytes UUID header + 4 bytes chunkIndex uint32 + raw chunk data
-      const headerLength = 36 + 4; // 36 char string + 4 bytes uint32
-      const packetBuffer = new ArrayBuffer(headerLength + chunkBuffer.byteLength);
-      const headerView = new DataView(packetBuffer);
-      const uint8View = new Uint8Array(packetBuffer);
+      if (channel && channel.readyState === 'open') {
+        // High-speed DataChannel Path
+        if (channel.bufferedAmount > this.bufferThreshold) {
+          await waitForBufferDrain(channel);
+        }
 
-      // Write UUID as ASCII
-      for (let i = 0; i < 36; i++) {
-        uint8View[i] = fileId.charCodeAt(i);
-      }
-      // Write chunk index
-      headerView.setUint32(36, chunkIndex, false);
-      // Copy chunk payload
-      uint8View.set(new Uint8Array(chunkBuffer), headerLength);
+        // Header: 36 bytes UUID header + 4 bytes chunkIndex uint32 + raw chunk data
+        const headerLength = 36 + 4;
+        const packetBuffer = new ArrayBuffer(headerLength + chunkBuffer.byteLength);
+        const headerView = new DataView(packetBuffer);
+        const uint8View = new Uint8Array(packetBuffer);
 
-      try {
-        channel.send(packetBuffer);
-      } catch (err) {
-        console.error('[FileTransfer] Error sending chunk packet:', err);
-        this.handleTransferError(fileId, 'outbound', err.message);
+        for (let i = 0; i < 36; i++) {
+          uint8View[i] = fileId.charCodeAt(i);
+        }
+        headerView.setUint32(36, chunkIndex, false);
+        uint8View.set(new Uint8Array(chunkBuffer), headerLength);
+
+        try {
+          channel.send(packetBuffer);
+        } catch (err) {
+          console.warn('[FileTransfer] DataChannel write failed, trying signaling fallback:', err);
+          if (this.signalingManager && this.signalingManager.isConnected && typeof SecurityManager !== 'undefined') {
+            const b64 = SecurityManager.arrayBufferToBase64(chunkBuffer);
+            this.signalingManager.send({
+              type: 'file_control',
+              recipientId: targetPeerId,
+              payload: { type: 'file_chunk', fileId, chunkIndex, data: b64 }
+            });
+          }
+        }
+      } else if (this.signalingManager && this.signalingManager.isConnected && typeof SecurityManager !== 'undefined') {
+        // Universal Signaling Relay Fallback (Port 443)
+        const b64 = SecurityManager.arrayBufferToBase64(chunkBuffer);
+        this.signalingManager.send({
+          type: 'file_control',
+          recipientId: targetPeerId,
+          payload: { type: 'file_chunk', fileId, chunkIndex, data: b64 }
+        });
+        await new Promise(r => setTimeout(r, 10)); // prevent network buffer choke
+      } else {
+        this.handleTransferError(fileId, 'outbound', 'No active connection to stream file.');
         return;
       }
 

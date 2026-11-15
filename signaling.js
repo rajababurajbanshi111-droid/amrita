@@ -44,8 +44,6 @@ class SignalingManager {
     this.teacherConn = null;             // DataConnection to teacher
     this.activeStream = null;            // Active screen share stream (if teacher)
     this.pendingRemoteStream = null;     // Remote screen stream buffered for student
-    this.studentPresenterCall = null;    // Call to teacher when student presents
-    this._hasStudentCallHandler = false;
 
     // Robust Admission & Delivery Tracking
     this.approvedStudents = new Set();      // studentIds approved by teacher
@@ -80,14 +78,11 @@ class SignalingManager {
     this.onSignalAnswer = null;
     this.onSignalCandidate = null;
     this.onStudentKicked = null;
+    this.onGrantScreenShare = null;
+    this.onRevokeScreenShare = null;
+    this.onStudentStreamStarted = null;
+    this.onStudentStreamStopped = null;
     this.onStudentStreamReceived = null;
-    this.onStreamReceived = null;
-    this.onSpotlightRequested = null;
-    this.onSpotlightAborted = null;
-    this.onSpotlightDeclined = null;
-    this.onSpotlightStarted = null;
-    this.onSpotlightStopped = null;
-    this.onPermissionChange = null;
     this.onError = null;
   }
 
@@ -269,15 +264,11 @@ class SignalingManager {
         if (!this.peer || this.peer.destroyed) {
           try {
             this.peer = new Peer(this.getPeerConfig());
-            this._hasStudentCallHandler = false;
-            this.setupStudentCallHandler();
-
             this.peer.on('open', (id) => {
               this.clientId = id;
               this.isConnected = true;
               this.startHeartbeat();
               console.log('[Signaling] Connected to Cloud Signaling (Port 443). Peer ID:', id);
-              this.setupStudentCallHandler();
               if (this.onServerStatusChange) {
                 this.onServerStatusChange(true, 'Signaling Online (Port 443)');
               }
@@ -293,7 +284,6 @@ class SignalingManager {
           }
         } else if (this.peer.open) {
           this.isConnected = true;
-          this.setupStudentCallHandler();
           if (this.onServerStatusChange) {
             this.onServerStatusChange(true, 'Signaling Online (Port 443)');
           }
@@ -367,7 +357,6 @@ class SignalingManager {
         }
       });
 
-      // Data connection listener (control messages)
       this.peer.on('connection', (conn) => {
         console.log('[Signaling] Student incoming connection:', conn.peer);
         this.studentConnections.set(conn.peer, conn);
@@ -400,6 +389,12 @@ class SignalingManager {
           if (conn.peerConnection && window.webrtc) {
             window.webrtc.peerConnections.set(conn.peer, conn.peerConnection);
           }
+          if (conn.dataChannel) {
+            conn.dataChannel.binaryType = 'arraybuffer';
+            if (window.webrtc) {
+              window.webrtc.dataChannels.set(conn.peer, conn.dataChannel);
+            }
+          }
           if (this.approvedStudents.has(conn.peer)) {
             this.sendApprovalToStudent(conn.peer);
             if (this.activeStream) {
@@ -409,6 +404,14 @@ class SignalingManager {
         });
 
         conn.on('data', (data) => {
+          // Binary packet handling for high-speed file transfer
+          if (data instanceof ArrayBuffer || data instanceof Blob || (data && data.byteLength !== undefined)) {
+            const buf = data instanceof Blob ? data : (data instanceof ArrayBuffer ? data : (data.buffer || data));
+            if (window.fileTransfer && typeof window.fileTransfer.handleBinaryChunk === 'function') {
+              window.fileTransfer.handleBinaryChunk(conn.peer, buf);
+            }
+            return;
+          }
           try {
             const msg = typeof data === 'string' ? JSON.parse(data) : data;
             this.handleIncomingMessage(msg, conn.peer);
@@ -436,26 +439,43 @@ class SignalingManager {
         });
       });
 
-      // Media call listener (when student shares screen to teacher)
+      // Handle student presentation stream call to teacher
       this.peer.on('call', (call) => {
-        console.log('[Signaling] Teacher received incoming presentation call from student:', call.peer);
+        console.log('[Signaling] Incoming presentation call from student:', call.peer);
         call.answer();
 
-        const handleStudentIncomingStream = (stream) => {
-          console.log('[Signaling] Teacher received student screen stream from:', call.peer);
-          if (typeof this.onStudentStreamReceived === 'function') {
-            this.onStudentStreamReceived(stream, call.peer);
+        call.on('stream', (studentStream) => {
+          console.log('[Signaling] Received live presentation stream from student:', call.peer);
+          this.activeStream = studentStream;
+          if (this.onStudentStreamReceived) {
+            this.onStudentStreamReceived(call.peer, studentStream);
           }
-        };
 
-        call.on('stream', (stream) => handleStudentIncomingStream(stream));
-
-        if (call.peerConnection) {
-          call.peerConnection.addEventListener('track', (event) => {
-            const rStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
-            handleStudentIncomingStream(rStream);
+          // Broadcast student's stream to ALL OTHER admitted students
+          this.studentConnections.forEach((conn, studentId) => {
+            if (studentId !== call.peer && this.approvedStudents.has(studentId)) {
+              this.dispatchCallToStudent(studentId);
+            }
           });
-        }
+
+          this.send({
+            type: 'stream_started',
+            hasAudio: studentStream.getAudioTracks().length > 0,
+            presenterId: call.peer
+          });
+        });
+
+        call.on('close', () => {
+          console.log('[Signaling] Student presentation call closed:', call.peer);
+          this.stopStream();
+          if (this.onStudentStreamStopped) {
+            this.onStudentStreamStopped(call.peer);
+          }
+        });
+
+        call.on('error', (err) => {
+          console.warn('[Signaling] Student call error:', call.peer, err);
+        });
       });
 
       this.peer.on('error', (err) => {
@@ -529,7 +549,6 @@ class SignalingManager {
     }
 
     if (this.peer && !this.peer.destroyed && this.peer.open) {
-      this.setupStudentCallHandler();
       this.connectStudentToTeacher();
       return;
     }
@@ -541,7 +560,6 @@ class SignalingManager {
 
     try {
       this.peer = new Peer(this.getPeerConfig());
-      this._hasStudentCallHandler = false;
 
       this.peer.on('open', (myId) => {
         console.log('[Signaling] Student PeerJS ready with ID:', myId);
@@ -549,7 +567,6 @@ class SignalingManager {
         this.isConnected = true;
         this.startHeartbeat();
         if (this.onServerStatusChange) this.onServerStatusChange(true, 'Signaling Online (Port 443)');
-        this.setupStudentCallHandler();
         this.connectStudentToTeacher();
       });
 
@@ -571,7 +588,6 @@ class SignalingManager {
   connectStudentToTeacher() {
     if (!this.peer || this.peer.destroyed || !this.peer.open) return;
 
-    this.setupStudentCallHandler();
     const teacherPeerId = 'smartclass-room-' + this.currentRoomCode + '-teacher';
     console.log('[Signaling] Connecting student to teacher:', teacherPeerId);
 
@@ -614,6 +630,12 @@ class SignalingManager {
       if (conn.peerConnection && window.webrtc) {
         window.webrtc.peerConnections.set(teacherPeerId, conn.peerConnection);
       }
+      if (conn.dataChannel) {
+        conn.dataChannel.binaryType = 'arraybuffer';
+        if (window.webrtc) {
+          window.webrtc.dataChannels.set(teacherPeerId, conn.dataChannel);
+        }
+      }
       sendJoinPing();
     });
 
@@ -629,8 +651,10 @@ class SignalingManager {
 
     conn.on('data', (data) => {
       if (data instanceof ArrayBuffer || data instanceof Blob || (data && data.byteLength !== undefined) || (data && data.buffer instanceof ArrayBuffer)) {
-        if (typeof this.onBinaryMedia === 'function') {
-          const buf = data instanceof Blob ? data : (data instanceof ArrayBuffer ? data : (data.buffer || data));
+        const buf = data instanceof Blob ? data : (data instanceof ArrayBuffer ? data : (data.buffer || data));
+        if (window.fileTransfer && typeof window.fileTransfer.handleBinaryChunk === 'function') {
+          window.fileTransfer.handleBinaryChunk(teacherPeerId, buf);
+        } else if (typeof this.onBinaryMedia === 'function') {
           this.onBinaryMedia(buf);
         }
         return;
@@ -655,13 +679,11 @@ class SignalingManager {
   }
 
   setupStudentCallHandler() {
-    if (!this.peer || this.peer.destroyed) return;
-    if (this._hasStudentCallHandler) return;
-    this._hasStudentCallHandler = true;
+    if (!this.peer) return;
 
     // Handle incoming screen presentation call from teacher
     this.peer.on('call', (call) => {
-      console.log('[Signaling] Incoming presentation call from presenter:', call.peer);
+      console.log('[Signaling] Incoming presentation call from teacher:', call.peer);
       call.answer();
 
       // Teacher initiating media call confirms admission! Unlock stage immediately!
@@ -680,33 +702,6 @@ class SignalingManager {
       if (classScr) classScr.style.setProperty('display', 'flex', 'important');
       if (typeof switchView === 'function') switchView('student');
 
-      const handleRemoteStream = (remoteStream) => {
-        console.log('[Signaling] Presentation stream received! Tracks:', remoteStream.getTracks().length);
-        this.pendingRemoteStream = remoteStream;
-
-        if (typeof remoteStream.addEventListener === 'function') {
-          remoteStream.onaddtrack = () => {
-            if (typeof window.activateRemoteVideoStream === 'function') {
-              window.activateRemoteVideoStream(remoteStream);
-            } else if (typeof activateRemoteVideoStream === 'function') {
-              activateRemoteVideoStream(remoteStream);
-            }
-          };
-        }
-
-        if (typeof window.activateRemoteVideoStream === 'function') {
-          window.activateRemoteVideoStream(remoteStream);
-        } else if (typeof activateRemoteVideoStream === 'function') {
-          activateRemoteVideoStream(remoteStream);
-        }
-
-        if (typeof this.onStreamReceived === 'function') {
-          this.onStreamReceived(remoteStream);
-        }
-      };
-
-      call.on('stream', (remoteStream) => handleRemoteStream(remoteStream));
-
       if (call.peerConnection) {
         if (window.webrtc) {
           window.webrtc.peerConnections.set('media-' + call.peer, call.peerConnection);
@@ -714,37 +709,48 @@ class SignalingManager {
         call.peerConnection.addEventListener('track', (event) => {
           console.log('[Signaling] Native RTCPeerConnection track event fired! Kind:', event.track.kind);
           const rStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
-          handleRemoteStream(rStream);
+          this.pendingRemoteStream = rStream;
+          if (rStream.getVideoTracks().length > 0 && typeof activateRemoteVideoStream === 'function') {
+            activateRemoteVideoStream(rStream);
+          }
         });
       }
 
+      call.on('stream', (remoteStream) => {
+        console.log('[Signaling] Presentation stream received! Tracks:', remoteStream.getTracks().length);
+        this.pendingRemoteStream = remoteStream;
+
+        if (typeof remoteStream.addEventListener === 'function') {
+          remoteStream.onaddtrack = () => {
+            if (typeof activateRemoteVideoStream === 'function') {
+              activateRemoteVideoStream(remoteStream);
+            }
+          };
+        }
+
+        if (typeof activateRemoteVideoStream === 'function') {
+          activateRemoteVideoStream(remoteStream);
+        }
+
+        if (this.teacherConn && this.teacherConn.open) {
+          try {
+            this.teacherConn.send({
+              type: 'room_join_ack',
+              studentId: this.clientId,
+              roomCode: this.currentRoomCode
+            });
+          } catch(e) {}
+        }
+      });
+
       call.on('close', () => {
-        console.log('[Signaling] Presentation call closed by teacher/presenter');
+        console.log('[Signaling] Presentation call closed by teacher');
         this.pendingRemoteStream = null;
-        if (typeof window.deactivateRemoteVideoStream === 'function') {
-          window.deactivateRemoteVideoStream();
-        } else if (typeof deactivateRemoteVideoStream === 'function') {
+        if (typeof deactivateRemoteVideoStream === 'function') {
           deactivateRemoteVideoStream();
         }
       });
     });
-  }
-
-  // Student calls teacher with their local screen stream (Student Spotlight / Presentation)
-  callTeacherWithStream(stream) {
-    if (!stream || !this.peer) return null;
-    const teacherPeerId = 'smartclass-room-' + this.currentRoomCode + '-teacher';
-    console.log('[Signaling] Student calling teacher with local screen stream:', teacherPeerId);
-    try {
-      const call = this.peer.call(teacherPeerId, stream);
-      this.studentPresenterCall = call;
-      call.on('error', (err) => console.warn('[Signaling] Student presenter call error:', err));
-      call.on('close', () => console.log('[Signaling] Student presenter call closed'));
-      return call;
-    } catch (e) {
-      console.error('[Signaling] Failed to call teacher with stream:', e);
-      return null;
-    }
   }
 
   // =========================================================================
@@ -836,14 +842,15 @@ class SignalingManager {
     try {
       if (this.mediaCalls.has(studentId)) {
         const existingCall = this.mediaCalls.get(studentId);
-        if (existingCall) {
-          try { existingCall.close(); } catch(e) {}
+        if (existingCall && (existingCall.open || (existingCall.peerConnection && existingCall.peerConnection.connectionState === 'connected'))) {
+          console.log('[Signaling] Media call already active for student:', studentId);
+          return;
         }
+        try { existingCall.close(); } catch(e) {}
       }
       console.log('[Signaling] Dispatching media presentation call to student:', studentId);
       const call = this.peer.call(studentId, this.activeStream);
       this.mediaCalls.set(studentId, call);
-      call.on('error', (err) => console.warn('[Signaling] Media call error with ' + studentId + ':', err));
     } catch (e) {
       console.warn('[Signaling] Error dispatching media call to student ' + studentId + ':', e);
     }
@@ -953,16 +960,12 @@ class SignalingManager {
   // Screen Presentation Broadcasting
   // =========================================================================
 
-  broadcastStream(stream, excludeStudentId = null) {
+  broadcastStream(stream) {
     this.activeStream = stream;
 
     if (this.peer) {
       console.log('[Signaling] Broadcasting presentation stream to admitted students via WebRTC...');
       this.studentConnections.forEach((conn, studentId) => {
-        if (excludeStudentId && studentId === excludeStudentId) {
-          // Do not echo the student's own presentation stream back to them
-          return;
-        }
         if (!this.approvedStudents.has(studentId) && !(window.classroom && window.classroom.connectedStudents && window.classroom.connectedStudents.has(studentId))) {
           console.log('[Signaling] Skipping unadmitted student during screen broadcast:', studentId);
           return;
@@ -973,8 +976,7 @@ class SignalingManager {
 
     this.send({
       type: 'stream_started',
-      hasAudio: stream ? stream.getAudioTracks().length > 0 : false,
-      excludeStudentId: excludeStudentId
+      hasAudio: stream.getAudioTracks().length > 0
     });
   }
 
@@ -985,6 +987,25 @@ class SignalingManager {
     });
     this.mediaCalls.clear();
     this.send({ type: 'stream_stopped' });
+  }
+
+  grantStudentScreenShare(studentId) {
+    console.log('[Signaling] Granting screen share to student:', studentId);
+    return this.send({
+      type: 'grant_screen_share',
+      recipientId: studentId,
+      studentId: studentId
+    });
+  }
+
+  revokeStudentScreenShare(studentId) {
+    console.log('[Signaling] Revoking screen share from student:', studentId);
+    this.stopStream();
+    return this.send({
+      type: 'revoke_screen_share',
+      recipientId: studentId,
+      studentId: studentId
+    });
   }
 
   // =========================================================================
@@ -1047,7 +1068,7 @@ class SignalingManager {
 
     // Relay messages across peers if teacher
     if (this.role === 'teacher' && fromPeer && !this.isWsMode) {
-      const shouldRelay = ['chat_message', 'reaction', 'wb_stroke', 'wb_clear', 'announcement', 'raise_hand', 'permission_change', 'student_spotlight_started', 'student_spotlight_stopped'].includes(msg.type);
+      const shouldRelay = ['chat_message', 'reaction', 'wb_stroke', 'wb_clear', 'announcement', 'raise_hand'].includes(msg.type);
       if (shouldRelay) {
         this.studentConnections.forEach((conn) => {
           if (conn.peer !== fromPeer && conn.open) {
@@ -1150,18 +1171,34 @@ class SignalingManager {
         break;
 
       case 'stream_started':
-      case 'teacher_stream_started':
         if (this.onStreamStarted) this.onStreamStarted(msg);
         break;
 
       case 'stream_stopped':
-      case 'teacher_stream_stopped':
         if (this.onStreamStopped) this.onStreamStopped(msg);
-        if (typeof window.deactivateRemoteVideoStream === 'function') {
-          window.deactivateRemoteVideoStream();
-        } else if (typeof deactivateRemoteVideoStream === 'function') {
+        if (typeof deactivateRemoteVideoStream === 'function') {
           deactivateRemoteVideoStream();
         }
+        break;
+
+      case 'file_control':
+        if (this.onFileControl) this.onFileControl(msg);
+        break;
+
+      case 'grant_screen_share':
+        if (this.onGrantScreenShare) this.onGrantScreenShare(msg);
+        break;
+
+      case 'revoke_screen_share':
+        if (this.onRevokeScreenShare) this.onRevokeScreenShare(msg);
+        break;
+
+      case 'student_stream_started':
+        if (this.onStudentStreamStarted) this.onStudentStreamStarted(msg);
+        break;
+
+      case 'student_stream_stopped':
+        if (this.onStudentStreamStopped) this.onStudentStreamStopped(msg);
         break;
 
       case 'wb_stroke':
@@ -1170,35 +1207,6 @@ class SignalingManager {
 
       case 'wb_clear':
         if (this.onWbClear) this.onWbClear(msg);
-        break;
-
-      // Spotlight Presentation Actions
-      case 'teacher_request_spotlight':
-        if (msg.targetStudentId === this.clientId) {
-          if (typeof this.onSpotlightRequested === 'function') this.onSpotlightRequested(msg);
-        }
-        break;
-
-      case 'teacher_abort_spotlight':
-        if (msg.targetStudentId === this.clientId || !msg.targetStudentId) {
-          if (typeof this.onSpotlightAborted === 'function') this.onSpotlightAborted(msg);
-        }
-        break;
-
-      case 'student_spotlight_declined':
-        if (typeof this.onSpotlightDeclined === 'function') this.onSpotlightDeclined(msg);
-        break;
-
-      case 'student_spotlight_started':
-        if (typeof this.onSpotlightStarted === 'function') this.onSpotlightStarted(msg);
-        break;
-
-      case 'student_spotlight_stopped':
-        if (typeof this.onSpotlightStopped === 'function') this.onSpotlightStopped(msg);
-        break;
-
-      case 'permission_change':
-        if (typeof this.onPermissionChange === 'function') this.onPermissionChange(msg);
         break;
 
       default:

@@ -18,6 +18,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const router = new DataChannelRouter(webrtc, signaling);
   const screenShare = new ScreenShareManager(webrtc, signaling);
   const fileTransfer = new FileTransferManager(webrtc, router, signaling);
+  window.fileTransfer = fileTransfer;
   const media = new MediaManager(webrtc);
   const diagnostics = new DiagnosticsEngine(webrtc);
   const classroom = new ClassroomManager(signaling, webrtc, router);
@@ -101,9 +102,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const teacherAudioStatusDot = document.getElementById('teacherAudioStatusDot');
   const teacherAudioStatusText = document.getElementById('teacherAudioStatusText');
   const teacherSidebarScreenDot = document.getElementById('teacherSidebarScreenDot');
-  const teacherSpotlightBanner = document.getElementById('teacherSpotlightBanner');
-  const teacherSpotlightInfo = document.getElementById('teacherSpotlightInfo');
-  const teacherBtnAbortSpotlight = document.getElementById('teacherBtnAbortSpotlight');
 
   // Teacher Roster & Participants Elements
   const pendingApprovalList = document.getElementById('pendingApprovalList');
@@ -192,12 +190,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const studentLeaveClassroomBtn = document.getElementById('studentLeaveClassroomBtn');
   const studentSidePanel = document.getElementById('studentSidePanel');
   const studentReactionsLayer = document.getElementById('studentReactionsLayer');
-  const studentPresenterBar = document.getElementById('studentPresenterBar');
-  const studentStopMyScreenBtn = document.getElementById('studentStopMyScreenBtn');
-  const studentShareScreenBtn = document.getElementById('studentShareScreenBtn');
-  const studentSpotlightPrompt = document.getElementById('studentSpotlightPrompt');
-  const btnStudentAcceptSpotlight = document.getElementById('btnStudentAcceptSpotlight');
-  const btnStudentDeclineSpotlight = document.getElementById('btnStudentDeclineSpotlight');
 
   const studentChatLog = document.getElementById('studentChatLog');
   const studentChatInput = document.getElementById('studentChatInput');
@@ -663,22 +655,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function updateRoomCodeDisplay(code) {
-    headerRoomCodeText.textContent = code;
-    teacherBannerCode.querySelector('span').textContent = code;
-    qrRoomCodeDisplay.textContent = code;
-    teacherRoomTitle.textContent = `Classroom Active (Room: ${code})`;
-
-    // Generate dynamic QR code using LAN URL
-    const joinUrl = `${teacherLanUrl}/?room=${code}&role=student`;
-    try {
-      QRCodeEngine.renderToCanvas(sessionQrCanvas, joinUrl, {
-        size: 200,
-        darkColor: '#00f0ff',
-        lightColor: '#0c101d'
-      });
-    } catch (e) {
-      console.warn('QR render error:', e);
+    if (headerRoomCodeText) headerRoomCodeText.textContent = code;
+    if (teacherBannerCode && teacherBannerCode.querySelector('span')) {
+      teacherBannerCode.querySelector('span').textContent = code;
     }
+    if (teacherRoomTitle) teacherRoomTitle.textContent = `Classroom Active (Room: ${code})`;
   }
 
   // Copy code handlers
@@ -691,7 +672,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   headerCopyCodeBtn.addEventListener('click', copyRoomCode);
   teacherBannerCode.addEventListener('click', copyRoomCode);
 
-  teacherShowQrBtn.addEventListener('click', () => openModal(qrModal));
+  if (teacherShowQrBtn && qrModal) { teacherShowQrBtn.addEventListener('click', () => openModal(qrModal)); }
 
   teacherCopyInviteLinkBtn.addEventListener('click', () => {
     const code = classroom.sessionCode || headerRoomCodeText.textContent;
@@ -718,13 +699,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       } catch (e) {}
     }
     if (screenShare.isSharing) screenShare.stopScreenShare();
-    if (studentLocalScreenStream) {
-      try { studentLocalScreenStream.getTracks().forEach((t) => t.stop()); } catch (e) {}
-      studentLocalScreenStream = null;
-    }
-    if (studentPresenterBar) studentPresenterBar.style.display = 'none';
-    if (teacherSpotlightBanner) teacherSpotlightBanner.style.display = 'none';
-    currentSpotlightStudentId = null;
     classroom.endSession();
     stopSessionTimer();
     if (studentRoomCodeInput) studentRoomCodeInput.value = '';
@@ -789,7 +763,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
           <button class="btn btn-secondary" style="padding: 0.35rem 0.65rem; font-size: 0.75rem;" data-link-slot="${slot.slotId}">🔗 Copy 1-Click Invite Link</button>
           <button class="btn btn-secondary" style="padding: 0.35rem 0.65rem; font-size: 0.75rem;" data-copy-slot="${slot.slotId}">Copy Token</button>
-          <button class="btn btn-secondary" style="padding: 0.35rem 0.65rem; font-size: 0.75rem;" data-qr-slot="${slot.slotId}">Show QR</button>
+          
         </div>
         <div>
           <label style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem; display: block;">Paste Student Answer Token:</label>
@@ -811,12 +785,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         navigator.clipboard.writeText(slot.offerToken).then(() => showToast(`Offer Token for Slot #${slot.slotNumber} copied!`, 'success'));
       });
 
-      // Show slot QR
-      card.querySelector(`[data-qr-slot="${slot.slotId}"]`).addEventListener('click', () => {
-        QRCodeEngine.renderToCanvas(sessionQrCanvas, slot.offerToken, { size: 220, darkColor: '#00f0ff', lightColor: '#0c101d' });
-        qrRoomCodeDisplay.textContent = `Slot #${slot.slotNumber} Token`;
-        openModal(qrModal);
-      });
+      // QR code removed as requested
 
       // Connect slot answer
       card.querySelector(`[data-connect-slot="${slot.slotId}"]`).addEventListener('click', async () => {
@@ -1295,15 +1264,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       } else if (studentVideo.paused) {
         studentVideo.play().catch(() => {});
       }
-
-      videoTracks.forEach((t) => {
-        t.onunmute = () => {
-          console.log('[Video] Remote track unmuted, playing video');
-          if (studentVideo && studentVideo.paused) {
-            studentVideo.play().catch(() => {});
-          }
-        };
-      });
     }
     if (typeof setStreamEngine === 'function') {
       setStreamEngine('webrtc');
@@ -1448,7 +1408,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const filter = filterInput ? filterInput.value.trim().toLowerCase() : '';
 
     if (!tbody) return;
-    const records = Array.from(sessionAttendance.values());
+    const records = Array.from(sessionAttendance.values()).filter(r => r.status === 'Present');
     const presentCount = records.filter(r => r.status === 'Present').length;
     if (badge) badge.textContent = `${presentCount} Present`;
 
@@ -1683,11 +1643,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Teacher side: when a student's WebRTC connection drops, remove them from all UI lists
     if ((state === 'disconnected' || state === 'failed' || state === 'closed') &&
         classroom.role === 'teacher') {
-      // Update attendance record status
+      if (classroom.activePresenterId === peerId) {
+        classroom.abortStudentScreenShare();
+      }
+      // Remove disconnected student from attendance map so they do not appear in roster or saved file
       if (typeof sessionAttendance !== 'undefined') {
-        sessionAttendance.forEach((rec) => {
-          if (rec.id === peerId) rec.status = 'Disconnected';
-        });
+        sessionAttendance.delete(peerId);
       }
       // Remove from connected roster
       classroom.connectedStudents.delete(peerId);
@@ -1748,17 +1709,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  let currentSpotlightStudentId = null;
-  let studentLocalScreenStream = null;
-
   function renderConnectedRoster() {
     const list = connectedRosterList;
     if (!list) return;
 
     const students = Array.from(classroom.connectedStudents.values());
-    rosterCount.textContent = students.length;
-    teacherBannerStudentCount.textContent = `${students.length} / 100`;
-    teacherKpiStudentCount.innerHTML = `${students.length} <span style="font-size: 1rem; color: var(--text-muted);">/ 100</span>`;
+    if (rosterCount) rosterCount.textContent = students.length;
+    if (teacherBannerStudentCount) teacherBannerStudentCount.textContent = `${students.length} / 100`;
+    if (teacherKpiStudentCount) teacherKpiStudentCount.innerHTML = `${students.length} <span style="font-size: 1rem; color: var(--text-muted);">/ 100</span>`;
 
     if (students.length === 0) {
       list.innerHTML = '<div style="color: var(--text-muted); font-size: 0.8rem;">No students currently connected.</div>';
@@ -1767,302 +1725,56 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     list.innerHTML = '';
     students.forEach((st) => {
-      const isSpotlight = currentSpotlightStudentId === st.id;
+      const isPresenting = classroom.activePresenterId === st.id;
       const item = document.createElement('div');
       item.style.cssText = 'background: rgba(255,255,255,0.03); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.65rem 0.85rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;';
       item.innerHTML = `
-        <div style="flex: 1; min-width: 0;">
-          <div style="font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 0.4rem;">
+        <div>
+          <div style="font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
             <span>${st.name}</span> <span style="font-size: 0.72rem; color: #FFA6D8; font-family: var(--font-mono);">[${st.rollNo || 'N/A'}]</span>
             <span id="rosterHand_${st.id}" style="display: none; font-size: 0.8rem;">✋</span>
-            ${isSpotlight ? '<span style="font-size: 0.7rem; background: var(--accent-red); color: #fff; padding: 0.1rem 0.35rem; border-radius: 3px; font-weight: 700;">LIVE SCREEN</span>' : ''}
+            ${isPresenting ? '<span style="font-size: 0.7rem; padding: 0.1rem 0.45rem; background: rgba(59,130,246,0.25); border: 1px solid #3B82F6; border-radius: 4px; color: #60A5FA; font-weight: 600;">🎥 Sharing Screen</span>' : ''}
           </div>
           <div style="font-size: 0.7rem; color: var(--accent-green); font-family: var(--font-mono);">Connected (P2P / SFU)</div>
         </div>
-        <div style="display: flex; gap: 0.4rem; align-items: center; flex-shrink: 0;">
-          ${isSpotlight
-            ? `<button class="btn btn-warning" style="padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 600;" data-spotlight-abort="${st.id}">⏹ Abort Share</button>`
-            : currentSpotlightStudentId
-              ? `<button class="btn btn-secondary" style="padding: 0.2rem 0.5rem; font-size: 0.7rem; opacity: 0.5;" disabled title="Another student is currently sharing">📺 In Use</button>`
-              : `<button class="btn btn-secondary" style="padding: 0.2rem 0.5rem; font-size: 0.7rem;" data-spotlight-req="${st.id}" title="Invite student to broadcast screen">📺 Ask to Share</button>`
+        <div style="display: flex; gap: 0.4rem; align-items: center;">
+          ${isPresenting 
+            ? `<button class="btn btn-warning" style="padding: 0.25rem 0.6rem; font-size: 0.72rem; font-weight: 600;" data-abort-share="${st.id}">⏹ Abort Share</button>`
+            : `<button class="btn btn-secondary" style="padding: 0.25rem 0.6rem; font-size: 0.72rem; font-weight: 500;" data-grant-share="${st.id}">🖥️ Share Screen</button>`
           }
-          <button class="btn btn-danger" style="padding: 0.2rem 0.5rem; font-size: 0.7rem;" data-kick="${st.id}">Remove</button>
+          <button class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.72rem;" data-kick="${st.id}">Remove</button>
         </div>
       `;
-      item.querySelector('[data-kick]').addEventListener('click', () => classroom.kickStudent(st.id));
-      const reqBtn = item.querySelector('[data-spotlight-req]');
-      if (reqBtn) {
-        reqBtn.addEventListener('click', () => {
-          signaling.send({
-            type: 'teacher_request_spotlight',
-            targetStudentId: st.id,
-            teacherName: 'Teacher'
-          });
-          showToast(`Invited ${st.name} to share their screen`, 'info');
+
+      const grantBtn = item.querySelector('[data-grant-share]');
+      if (grantBtn) {
+        grantBtn.addEventListener('click', () => {
+          classroom.grantStudentScreenShare(st.id);
+          renderConnectedRoster();
+          if (typeof showToast === 'function') {
+            showToast(`Screen share permission granted to ${st.name}. Awaiting student screen...`, 'info');
+          }
         });
       }
-      const abortBtn = item.querySelector('[data-spotlight-abort]');
+
+      const abortBtn = item.querySelector('[data-abort-share]');
       if (abortBtn) {
         abortBtn.addEventListener('click', () => {
-          abortStudentSpotlight(st.id);
+          classroom.abortStudentScreenShare();
+          if (teacherStudentPresentingBanner) teacherStudentPresentingBanner.style.display = 'none';
+          if (teacherScreenPreview) teacherScreenPreview.srcObject = null;
+          if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'flex';
+          renderConnectedRoster();
+          if (typeof showToast === 'function') {
+            showToast(`Aborted screen sharing for ${st.name}.`, 'warning');
+          }
         });
       }
+
+      item.querySelector('[data-kick]').addEventListener('click', () => classroom.kickStudent(st.id));
       list.appendChild(item);
     });
   }
-
-  function abortStudentSpotlight(studentId) {
-    const targetId = studentId || currentSpotlightStudentId;
-    if (!targetId && !currentSpotlightStudentId) return;
-
-    signaling.send({
-      type: 'teacher_abort_spotlight',
-      targetStudentId: targetId
-    });
-
-    signaling.stopStream();
-
-    currentSpotlightStudentId = null;
-    if (teacherSpotlightBanner) teacherSpotlightBanner.style.display = 'none';
-    if (teacherScreenPreview) {
-      teacherScreenPreview.srcObject = null;
-    }
-    if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'flex';
-    if (teacherStageControls) teacherStageControls.style.display = 'none';
-
-    renderConnectedRoster();
-    showToast('Student screen sharing session aborted', 'info');
-  }
-
-  if (teacherBtnAbortSpotlight) {
-    teacherBtnAbortSpotlight.addEventListener('click', () => {
-      abortStudentSpotlight(currentSpotlightStudentId);
-    });
-  }
-
-  // Teacher handles incoming student screen stream & broadcasts to all other students
-  signaling.onStudentStreamReceived = (stream, studentPeerId) => {
-    currentSpotlightStudentId = studentPeerId;
-    const studentObj = classroom.connectedStudents.get(studentPeerId) || { name: 'Student', rollNo: '' };
-
-    if (teacherScreenPreview) {
-      teacherScreenPreview.srcObject = stream;
-      teacherScreenPreview.play().catch(() => {});
-    }
-    if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'none';
-    if (teacherStageControls) teacherStageControls.style.display = 'flex';
-
-    if (teacherSpotlightBanner && teacherSpotlightInfo) {
-      teacherSpotlightInfo.textContent = `📺 Spotlight: ${studentObj.name} [${studentObj.rollNo || 'N/A'}] is presenting`;
-      teacherSpotlightBanner.style.display = 'flex';
-    }
-
-    // Broadcast student's presentation stream to all other students
-    signaling.broadcastStream(stream, studentPeerId);
-
-    signaling.send({
-      type: 'teacher_stream_started',
-      presenterName: studentObj.name,
-      presenterRole: 'student'
-    });
-
-    renderConnectedRoster();
-    showToast(`Broadcasting ${studentObj.name}'s screen to all students!`, 'success');
-  };
-
-  signaling.onSpotlightDeclined = (msg) => {
-    showToast(`${msg.studentName || 'Student'} declined the screen share invitation`, 'info');
-  };
-
-  signaling.onSpotlightStopped = (msg) => {
-    if (currentSpotlightStudentId === msg.studentId || !msg.studentId) {
-      currentSpotlightStudentId = null;
-      if (teacherSpotlightBanner) teacherSpotlightBanner.style.display = 'none';
-      if (teacherScreenPreview) {
-        teacherScreenPreview.srcObject = null;
-      }
-      if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'flex';
-      if (teacherStageControls) teacherStageControls.style.display = 'none';
-      renderConnectedRoster();
-      showToast('Student presentation finished', 'info');
-    }
-  };
-
-  signaling.onSpotlightRequested = (msg) => {
-    if (classroom.role === 'teacher') return;
-    if (studentSpotlightPrompt) {
-      studentSpotlightPrompt.style.display = 'flex';
-    }
-    showToast('📺 Teacher has invited you to share your screen with the class!', 'info');
-  };
-
-  signaling.onSpotlightAborted = () => {
-    if (studentSpotlightPrompt) studentSpotlightPrompt.style.display = 'none';
-    if (studentLocalScreenStream) {
-      studentLocalScreenStream.getTracks().forEach((t) => t.stop());
-      studentLocalScreenStream = null;
-    }
-    if (studentPresenterBar) {
-      studentPresenterBar.style.display = 'none';
-    }
-    showToast('Teacher stopped your screen share', 'info');
-  };
-
-  async function startStudentScreenSharing() {
-    if (studentSpotlightPrompt) studentSpotlightPrompt.style.display = 'none';
-    try {
-      showToast('Opening screen capture dialog...', 'info');
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { cursor: 'always', frameRate: { max: 30 } },
-        audio: true
-      });
-      studentLocalScreenStream = stream;
-
-      if (studentPresenterBar) {
-        studentPresenterBar.style.display = 'flex';
-      }
-
-      // Call teacher with this stream
-      signaling.callTeacherWithStream(stream);
-
-      // Notify teacher that spotlight presentation has started
-      signaling.send({
-        type: 'student_spotlight_started',
-        studentId: signaling.clientId,
-        studentName: classroom.currentStudent?.name || 'Student',
-        studentRollNo: classroom.currentStudent?.rollNo || ''
-      });
-
-      // Handle user clicking native browser "Stop sharing" chrome banner
-      const vTrack = stream.getVideoTracks()[0];
-      if (vTrack) {
-        vTrack.onended = () => {
-          stopStudentScreenSharing();
-        };
-      }
-      showToast('Your screen is now being broadcast to the classroom!', 'success');
-    } catch (err) {
-      console.warn('[ScreenShare] Student screen capture cancelled/failed:', err);
-      if (err.name !== 'NotAllowedError') {
-        showToast('Screen sharing failed: ' + err.message, 'error');
-      }
-      signaling.send({
-        type: 'student_spotlight_declined',
-        studentId: signaling.clientId,
-        studentName: classroom.currentStudent?.name || 'Student'
-      });
-    }
-  }
-
-  function stopStudentScreenSharing() {
-    if (studentLocalScreenStream) {
-      studentLocalScreenStream.getTracks().forEach((t) => t.stop());
-      studentLocalScreenStream = null;
-    }
-    if (studentPresenterBar) {
-      studentPresenterBar.style.display = 'none';
-    }
-    signaling.send({
-      type: 'student_spotlight_stopped',
-      studentId: signaling.clientId
-    });
-    showToast('Screen sharing stopped', 'info');
-  }
-
-  if (btnStudentAcceptSpotlight) {
-    btnStudentAcceptSpotlight.addEventListener('click', startStudentScreenSharing);
-  }
-
-  if (btnStudentDeclineSpotlight) {
-    btnStudentDeclineSpotlight.addEventListener('click', () => {
-      if (studentSpotlightPrompt) studentSpotlightPrompt.style.display = 'none';
-      signaling.send({
-        type: 'student_spotlight_declined',
-        studentId: signaling.clientId,
-        studentName: classroom.currentStudent?.name || 'Student'
-      });
-      showToast('Declined screen sharing invitation', 'info');
-    });
-  }
-
-  if (studentShareScreenBtn) {
-    studentShareScreenBtn.addEventListener('click', startStudentScreenSharing);
-  }
-
-  if (studentStopMyScreenBtn) {
-    studentStopMyScreenBtn.addEventListener('click', stopStudentScreenSharing);
-  }
-
-  // --- Student Privileges & Permission Controls ---
-  const permAllowChat = document.getElementById('permAllowChat');
-  const permAllowFiles = document.getElementById('permAllowFiles');
-  const permAllowScreen = document.getElementById('permAllowScreen');
-
-  function broadcastPermissions() {
-    const perms = {
-      allowChat: permAllowChat ? permAllowChat.checked : true,
-      allowFileTransfer: permAllowFiles ? permAllowFiles.checked : true,
-      allowStudentScreenShare: permAllowScreen ? permAllowScreen.checked : false
-    };
-    classroom.permissions = { ...classroom.permissions, ...perms };
-    signaling.send({
-      type: 'permission_change',
-      permissions: perms
-    });
-  }
-
-  if (permAllowChat) {
-    permAllowChat.addEventListener('change', () => {
-      broadcastPermissions();
-      showToast(`Student Chat ${permAllowChat.checked ? 'Enabled' : 'Disabled'}`, 'info');
-    });
-  }
-  if (permAllowFiles) {
-    permAllowFiles.addEventListener('change', () => {
-      broadcastPermissions();
-      showToast(`Student File Uploads ${permAllowFiles.checked ? 'Enabled' : 'Disabled'}`, 'info');
-    });
-  }
-  if (permAllowScreen) {
-    permAllowScreen.addEventListener('change', () => {
-      broadcastPermissions();
-      showToast(`Student Screen Sharing ${permAllowScreen.checked ? 'Enabled' : 'Disabled'}`, 'info');
-    });
-  }
-
-  signaling.onPermissionChange = (msg) => {
-    if (classroom.role === 'teacher') return;
-    const perms = msg.permissions || {};
-    classroom.permissions = { ...classroom.permissions, ...perms };
-
-    if (studentChatInput) {
-      studentChatInput.disabled = perms.allowChat === false;
-      studentChatInput.placeholder = perms.allowChat === false ? 'Chat disabled by teacher' : 'Type a message...';
-    }
-    if (studentChatSendBtn) {
-      studentChatSendBtn.disabled = perms.allowChat === false;
-    }
-
-    if (studentShareScreenBtn) {
-      studentShareScreenBtn.style.display = perms.allowStudentScreenShare ? 'flex' : 'none';
-    }
-    if (perms.allowStudentScreenShare === false && studentLocalScreenStream) {
-      stopStudentScreenSharing();
-      showToast('Teacher has revoked student screen sharing permission', 'warning');
-    }
-  };
-
-  signaling.onStreamReceived = (stream) => {
-    console.log('[App] Received incoming stream from signaling');
-    activateRemoteVideoStream(stream);
-  };
-
-  signaling.onStreamStopped = () => {
-    if (classroom.role !== 'teacher') {
-      showToast('Presenter stopped screen sharing', 'info');
-      deactivateRemoteVideoStream();
-    }
-  };
 
   approveAllBtn.addEventListener('click', () => classroom.approveAllPending());
   rejectAllBtn.addEventListener('click', () => classroom.rejectAllPending());

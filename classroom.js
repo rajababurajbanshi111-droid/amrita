@@ -19,6 +19,7 @@ class ClassroomManager {
     // Student rosters and queues
     this.connectedStudents = new Map(); // studentId -> { id, name, joinedAt, ip, peerConnection }
     this.pendingApprovals = new Map();  // studentId -> { id, name, timestamp, clientInfo }
+    this.activePresenterId = null;       // Currently presenting student peerId
 
     // Classroom permissions
     this.permissions = {
@@ -87,6 +88,9 @@ class ClassroomManager {
       if (!studentId) return;
       this.connectedStudents.delete(studentId);
       this.pendingApprovals.delete(studentId);
+      if (this.activePresenterId === studentId) {
+        this.abortStudentScreenShare();
+      }
       if (this.approvedStudentIds) this.approvedStudentIds.delete(studentId);
       if (this.webrtcManager) {
         try { this.webrtcManager.closeConnection(studentId); } catch (e) {}
@@ -193,7 +197,36 @@ class ClassroomManager {
   /**
    * Teacher removes/kicks an active student
    */
+
+  /**
+   * Teacher grants a specific student permission to share screen to the entire classroom
+   */
+  grantStudentScreenShare(studentId) {
+    if (this.role !== 'teacher') return;
+    this.activePresenterId = studentId;
+    if (this.signalingManager) {
+      this.signalingManager.grantStudentScreenShare(studentId);
+    }
+    console.log('[Classroom] Granted screen sharing permission to student:', studentId);
+  }
+
+  /**
+   * Teacher aborts active student screen sharing
+   */
+  abortStudentScreenShare() {
+    if (this.role !== 'teacher') return;
+    const prev = this.activePresenterId;
+    this.activePresenterId = null;
+    if (this.signalingManager) {
+      this.signalingManager.revokeStudentScreenShare(prev);
+    }
+    console.log('[Classroom] Aborted student screen sharing. Prev:', prev);
+  }
+
   kickStudent(studentId) {
+    if (this.activePresenterId === studentId) {
+      this.abortStudentScreenShare();
+    }
     this.connectedStudents.delete(studentId);
     if (this.signalingManager) {
       this.signalingManager.kickStudent(studentId, 'You have been removed from the classroom by the professor.');
