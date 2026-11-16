@@ -616,8 +616,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     showToast(`Classroom launched! Room Code: ${code}`, 'success');
   });
 
+  // Compute absolute base directory path (preserves repo name on GitHub Pages, e.g. /smart-webrtc-classroom/)
+  function getAppBaseUrl() {
+    const loc = window.location;
+    let path = loc.pathname || '/';
+    if (path.endsWith('index.html')) {
+      path = path.slice(0, -'index.html'.length);
+    }
+    if (!path.endsWith('/')) {
+      path += '/';
+    }
+    return `${loc.origin}${path}`;
+  }
+
   // Auto-detect teacher LAN IP for easy student sharing
-  let teacherLanUrl = window.location.origin;
+  let teacherLanUrl = getAppBaseUrl();
+  const bannerLanUrlEl = document.getElementById('teacherBannerLanUrl');
+  if (bannerLanUrlEl) {
+    bannerLanUrlEl.textContent = teacherLanUrl;
+  }
+
   async function detectLanNetwork() {
     try {
       const res = await fetch('/api/discovery');
@@ -630,26 +648,37 @@ document.addEventListener('DOMContentLoaded', async () => {
                          || data.interfaces[0];
           if (preferred && preferred.address) {
             const port = window.location.port || '3000';
-            teacherLanUrl = `http://${preferred.address}:${port}`;
+            const loc = window.location;
+            let path = loc.pathname || '/';
+            if (path.endsWith('index.html')) {
+              path = path.slice(0, -'index.html'.length);
+            }
+            if (!path.endsWith('/')) {
+              path += '/';
+            }
+            teacherLanUrl = `http://${preferred.address}:${port}${path}`;
             console.log('[LAN] Discovered Teacher LAN URL:', teacherLanUrl);
-            const bannerLanUrl = document.getElementById('teacherBannerLanUrl');
-            if (bannerLanUrl) {
-              bannerLanUrl.textContent = teacherLanUrl;
+            if (bannerLanUrlEl) {
+              bannerLanUrlEl.textContent = teacherLanUrl;
             }
           }
         }
       }
     } catch (e) {
-      // Offline fallback
+      // Offline / GitHub Pages fallback: keeps getAppBaseUrl()
     }
   }
   detectLanNetwork();
 
-  const bannerLanUrlEl = document.getElementById('teacherBannerLanUrl');
+  function getStudentJoinUrl(code) {
+    const base = teacherLanUrl.endsWith('/') ? teacherLanUrl : (teacherLanUrl + '/');
+    return `${base}?room=${code}&role=student`;
+  }
+
   if (bannerLanUrlEl) {
     bannerLanUrlEl.addEventListener('click', () => {
       const code = classroom.sessionCode || headerRoomCodeText.textContent;
-      const url = `${teacherLanUrl}/?room=${code}&role=student`;
+      const url = getStudentJoinUrl(code);
       navigator.clipboard.writeText(url).then(() => showToast(`Student Join URL copied: ${url}`, 'success'));
     });
   }
@@ -676,7 +705,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   teacherCopyInviteLinkBtn.addEventListener('click', () => {
     const code = classroom.sessionCode || headerRoomCodeText.textContent;
-    const url = `${teacherLanUrl}/?room=${code}&role=student`;
+    const url = getStudentJoinUrl(code);
     navigator.clipboard.writeText(url).then(() => showToast(`Student invite link copied! (${url})`, 'success'));
   });
 
@@ -819,7 +848,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function startPresenterScreenShare() {
     const preset = teacherQualitySelect.value || 'balanced';
     try {
-      showToast('Launching native screen capture dialog...', 'info');
+      showToast('Select screen, window, or tab to share...', 'info');
       const stream = await screenShare.startScreenShare(preset, true);
       teacherScreenPreview.srcObject = stream;
       teacherScreenPreview.play().catch(() => {});
@@ -836,11 +865,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         signaling.send({ type: 'stream_started', hasAudio: hasAudio });
       }
     } catch (err) {
-      console.warn('[App] Screen share launch note:', err);
-      if (err.name !== 'NotAllowedError' && (!err.message || !err.message.toLowerCase().includes('cancel'))) {
-        showToast(`Screen share notice: ${err.message || 'Please select a screen or window to share.'}`, 'warning');
+      console.warn('[App] Screen share launch error/cancel:', err);
+      if (err.name === 'NotAllowedError') {
+        showToast('Screen share dialog was closed or permission was denied.', 'info');
       } else {
-        showToast('Screen share dialog was cancelled.', 'info');
+        showToast(`Screen share notice: ${err.message || 'Please select a screen or window to share.'}`, 'warning');
       }
     }
   }

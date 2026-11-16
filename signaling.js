@@ -843,12 +843,29 @@ class SignalingManager {
       if (this.mediaCalls.has(studentId)) {
         const existingCall = this.mediaCalls.get(studentId);
         if (existingCall && (existingCall.open || (existingCall.peerConnection && existingCall.peerConnection.connectionState === 'connected'))) {
-          console.log('[Signaling] Media call already active for student:', studentId);
-          return;
+          console.log('[Signaling] Updating active media call tracks for student:', studentId);
+          const newVideoTrack = this.activeStream.getVideoTracks()[0];
+          const newAudioTrack = this.activeStream.getAudioTracks()[0] || null;
+          let trackReplaced = false;
+
+          if (existingCall.peerConnection) {
+            const senders = existingCall.peerConnection.getSenders();
+            senders.forEach((sender) => {
+              if (sender.track && sender.track.kind === 'video' && newVideoTrack) {
+                sender.replaceTrack(newVideoTrack).catch(e => console.warn('replaceTrack video warning:', e));
+                trackReplaced = true;
+              } else if (sender.track && sender.track.kind === 'audio' && newAudioTrack) {
+                sender.replaceTrack(newAudioTrack).catch(e => console.warn('replaceTrack audio warning:', e));
+              }
+            });
+          }
+          if (trackReplaced) {
+            return;
+          }
+          try { existingCall.close(); } catch(e) {}
         }
-        try { existingCall.close(); } catch(e) {}
       }
-      console.log('[Signaling] Dispatching media presentation call to student:', studentId);
+      console.log('[Signaling] Dispatching fresh media presentation call to student:', studentId);
       const call = this.peer.call(studentId, this.activeStream);
       this.mediaCalls.set(studentId, call);
     } catch (e) {

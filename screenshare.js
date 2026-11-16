@@ -33,8 +33,13 @@ class ScreenShareManager {
    */
   async startScreenShare(presetKey = 'balanced', captureAudio = true) {
     if (this.isSharing && this.activeStream) {
-      console.warn('[ScreenShare] Already active. Stop first before restarting.');
-      return this.activeStream;
+      const liveTracks = this.activeStream.getTracks().filter(t => t.readyState === 'live');
+      if (liveTracks.length > 0) {
+        console.warn('[ScreenShare] Already active. Stop first before restarting.');
+        return this.activeStream;
+      } else {
+        this.cleanup();
+      }
     }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
@@ -48,41 +53,33 @@ class ScreenShareManager {
 
     let stream = null;
 
-    // Strategy 1: Ideal dimensions with cursor and optional audio (no restrictive 'max' bounds)
+    // Strategy 1: Request with ideal resolution and standard audio flag
     try {
       console.log('[ScreenShare] Tier 1: Requesting display media with ideal constraints...');
       stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           width: { ideal: preset.width },
           height: { ideal: preset.height },
-          frameRate: { ideal: preset.frameRate, max: 30 },
-          cursor: 'always'
+          frameRate: { ideal: preset.frameRate }
         },
-        audio: captureAudio ? {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false
-        } : false
+        audio: !!captureAudio
       });
     } catch (err1) {
-      console.warn('[ScreenShare] Tier 1 capture failed, attempting video-only ideal fallback:', err1);
-      // If user explicitly pressed "Cancel" on native picker, respect cancellation and abort
-      if (err1.name === 'NotAllowedError' && (!err1.message || err1.message.toLowerCase().includes('permission denied') || err1.message.toLowerCase().includes('user cancelled') || err1.message.toLowerCase().includes('cancel'))) {
-        throw err1;
-      }
-
-      // Strategy 2: Video-only capture (bypasses OS/driver audio permission conflicts)
+      console.warn('[ScreenShare] Tier 1 capture failed or audio disallowed on selected source, attempting video-only fallback:', err1);
+      // Strategy 2: Video-only capture with ideal constraints (works when Window is selected or OS blocks display audio)
       try {
         console.log('[ScreenShare] Tier 2: Requesting video-only display media...');
         stream = await navigator.mediaDevices.getDisplayMedia({
           video: {
-            cursor: 'always'
+            width: { ideal: preset.width },
+            height: { ideal: preset.height },
+            frameRate: { ideal: preset.frameRate }
           },
           audio: false
         });
       } catch (err2) {
         console.warn('[ScreenShare] Tier 2 capture failed, attempting bare video fallback:', err2);
-        // Strategy 3: Pure bare video constraints (universal compatibility across all browsers)
+        // Strategy 3: Pure bare video constraints (universal compatibility across all browsers/OS)
         stream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
           audio: false
