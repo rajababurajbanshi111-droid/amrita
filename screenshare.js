@@ -32,15 +32,14 @@ class ScreenShareManager {
    * Starts screen capture with multi-tier adaptive fallbacks (guarantees prompt launch on any monitor/OS)
    */
   async startScreenShare(presetKey = 'balanced', captureAudio = true) {
-    if (this.isSharing && this.activeStream) {
+    if (this.activeStream) {
       const liveTracks = this.activeStream.getTracks().filter(t => t.readyState === 'live');
       if (liveTracks.length > 0) {
         console.warn('[ScreenShare] Already active. Stop first before restarting.');
         return this.activeStream;
-      } else {
-        this.cleanup();
       }
     }
+    this.cleanup();
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
       throw new Error('Screen capture (getDisplayMedia) is not supported in this browser or insecure context (HTTPS/localhost required).');
@@ -183,7 +182,7 @@ class ScreenShareManager {
    * Cleanly terminates screen capture and notifies peers
    */
   stopScreenShare() {
-    if (!this.isSharing) return;
+    if (!this.isSharing && !this.activeStream) return;
 
     if (this.webrtcManager) {
       this.webrtcManager.removeLocalStream('screen');

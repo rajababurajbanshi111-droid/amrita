@@ -176,7 +176,7 @@ class ClassroomManager {
   /**
    * Teacher rejects a pending student
    */
-  rejectStudent(studentId, reason = 'Professor declined admission request.') {
+  rejectStudent(studentId, reason = 'Amrita Faculty declined admission request.') {
     this.pendingApprovals.delete(studentId);
     if (this.signalingManager && this.signalingManager.isConnected) {
       this.signalingManager.rejectStudent(studentId, reason);
@@ -229,7 +229,7 @@ class ClassroomManager {
     }
     this.connectedStudents.delete(studentId);
     if (this.signalingManager) {
-      this.signalingManager.kickStudent(studentId, 'You have been removed from the classroom by the professor.');
+      this.signalingManager.kickStudent(studentId, 'You have been removed from the classroom by Amrita Faculty.');
     }
     if (this.webrtcManager) {
       this.webrtcManager.closeConnection(studentId);
@@ -251,6 +251,9 @@ class ClassroomManager {
   updatePermission(key, value) {
     if (this.permissions[key] !== undefined) {
       this.permissions[key] = !!value;
+      if (key === 'allowScreenShare' && !value && this.activePresenterId) {
+        this.abortStudentScreenShare();
+      }
       if (this.router) {
         this.router.broadcastPermissions(this.permissions);
       }

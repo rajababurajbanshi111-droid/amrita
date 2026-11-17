@@ -792,13 +792,13 @@
             <label class="u-s78">
               Student Full Name
             </label>
-            <input type="text" class="input-field" id="studentDisplayNameInput" placeholder="e.g. Rahul Sharma" maxlength="40" autocomplete="name">
+            <input type="text" class="input-field" id="studentDisplayNameInput" name="student_name_field_clean" placeholder="e.g. Rahul Sharma" maxlength="40" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-form-type="other">
           </div>
           <div class="u-s79">
             <label class="u-s78">
               Roll Number / Student ID
             </label>
-            <input type="text" class="input-field" id="studentRollNumberInput" placeholder="e.g. BL.EN.U4CSE21001" maxlength="35" autocomplete="off">
+            <input type="text" class="input-field" id="studentRollNumberInput" name="student_roll_field_clean" placeholder="e.g. BL.EN.U4CSE21001" maxlength="35" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-form-type="other">
           </div>
 
           <button class="btn btn-success style-studentsubmitjoinbtn" id="studentSubmitJoinBtn">
@@ -810,10 +810,10 @@
         <div class="style-studentwaitingapprovalbox" id="studentWaitingApprovalBox">
           <div class="u-s80"></div>
           <h4 class="u-s81">Admission Request Submitted</h4>
-          <p class="u-s82">Your request has been sent to the professor. You will be admitted automatically as soon as your admission is approved.</p>
+          <p class="u-s82">Your request has been sent to Amrita Faculty. You will be admitted automatically as soon as your admission is approved.</p>
           <div class="u-s44">
             <button class="btn btn-success style-studententerstagebtn" id="studentEnterStageBtn">
-              🚀 Enter Stage Directly (If Professor Approved)
+              🚀 Enter Stage Directly (If Amrita Faculty Approved)
             </button>
           </div>
           <div class="u-s83">Amrita Vishwa Vidyapeetham · Secure Live Stream</div>
@@ -839,7 +839,7 @@
         <div id="studentPresenterBanner" style="display:none; background: linear-gradient(135deg, rgba(16,185,129,0.2), rgba(59,130,246,0.2)); border: 1px solid #10B981; border-radius: var(--radius-sm); padding: 0.75rem 1rem; margin-bottom: 0.75rem; align-items: center; justify-content: space-between; z-index: 10; position: relative;">
           <div>
             <div style="font-weight: 600; font-size: 0.88rem; color: #34D399; display: flex; align-items: center; gap: 0.5rem;">
-              <span>🌟 Professor Granted You Screen Share</span>
+              <span>🌟 Amrita Faculty Granted You Screen Share</span>
             </div>
             <div style="font-size: 0.76rem; color: var(--text-muted); margin-top: 0.2rem;">
               Your screen will be broadcast to the teacher and all connected classmates.
@@ -886,7 +886,7 @@
             </div>
             <h3 class="u-s85">Connected to Classroom</h3>
             <p class="u-s86">
-              You are admitted! Waiting for your teacher to begin screen sharing. When presentation starts, video will appear automatically.
+              You are admitted! Waiting for Amrita live screen presentation to begin. When presentation starts, video will appear automatically.
             </p>
           </div>
         </div>
@@ -939,7 +939,7 @@
 
         <!-- Panel Body: Announcements Section -->
         <div class="panel-content-body style-studenttabsectionannouncements" id="studentTabSectionAnnouncements">
-          <h4 class="u-s89">Teacher Announcements</h4>
+          <h4 class="u-s89">Amrita Announcements</h4>
           <div class="style-studentannouncementslist" id="studentAnnouncementsList">
             <div class="u-s90">No announcements broadcast yet.</div>
           </div>
@@ -959,6 +959,10 @@
             <button class="raise-hand-btn" id="studentRaiseHandBtn">
               <span>✋</span>
               <span id="studentRaiseHandText">Raise Hand</span>
+            </button>
+            <button class="btn btn-secondary" id="studentRequestScreenBtn" style="padding: 0.35rem 0.75rem; font-size: 0.78rem; font-weight: 600; display: inline-flex; align-items: center; gap: 0.4rem; border-radius: var(--radius-sm);" title="Request Amrita Faculty permission to share your screen">
+              <span>🖥️</span>
+              <span>Request Screen</span>
             </button>
           </div>
 
@@ -995,7 +999,7 @@
             <div>
               <div style="font-size: 0.75rem; color: var(--accent-green); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;">Authenticated Teacher</div>
               <div style="font-size: 0.95rem; font-weight: 600; color: #fff;">
-                <span id="teacherAuthActiveName">Professor</span> (<span id="teacherAuthActiveUser" style="color: var(--text-cyan);">teacher</span>)
+                <span id="teacherAuthActiveName">Amrita Faculty</span> (<span id="teacherAuthActiveUser" style="color: var(--text-cyan);">teacher</span>)
               </div>
             </div>
             <button class="btn btn-secondary" id="teacherAuthLogoutBtn" style="padding: 0.3rem 0.65rem; font-size: 0.8rem;" type="button">Sign Out</button>
@@ -1044,7 +1048,7 @@
 
         <div>
           <label class="u-s92">Teacher Display Name</label>
-          <input type="text" class="input-field" id="createTeacherNameInput" value="Professor" maxlength="40">
+          <input type="text" class="input-field" id="createTeacherNameInput" value="Amrita Faculty" maxlength="40">
         </div>
         <div>
           <label class="u-s92">Screen Quality Preset</label>

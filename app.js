@@ -154,27 +154,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   // URL Query Parameter Handling (e.g. ?room=123456)
   const urlParams = new URLSearchParams(window.location.search);
 
-  // Auto-populate saved Student Name & Roll Number from localStorage, but NEVER restore old Session Code
-  if (studentDisplayNameInput && profile && profile.displayName) {
-    studentDisplayNameInput.value = profile.displayName;
+  // Only populate Student Name & Roll Number if explicitly provided via URL query parameters (?name=...&roll=...)
+  if (studentDisplayNameInput) {
+    studentDisplayNameInput.value = urlParams.get('name') || '';
   }
-  if (studentRollNumberInput && profile && profile.rollNo) {
-    studentRollNumberInput.value = profile.rollNo;
+  if (studentRollNumberInput) {
+    studentRollNumberInput.value = urlParams.get('roll') || urlParams.get('rollNo') || '';
   }
   if (studentRoomCodeInput && !urlParams.has('room')) {
     studentRoomCodeInput.value = '';
-  }
-
-  // Persist Student Name & Roll Number automatically when edited
-  if (studentDisplayNameInput) {
-    studentDisplayNameInput.addEventListener('input', () => {
-      storage.saveUserProfile({ displayName: studentDisplayNameInput.value.trim() });
-    });
-  }
-  if (studentRollNumberInput) {
-    studentRollNumberInput.addEventListener('input', () => {
-      storage.saveUserProfile({ rollNo: studentRollNumberInput.value.trim() });
-    });
   }
 
   const studentRemoteVideo = document.getElementById('studentRemoteVideo');
@@ -447,7 +435,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (teacherAuthActiveUser) teacherAuthActiveUser.textContent = savedUser;
       if (teacherAuthActiveName) teacherAuthActiveName.textContent = savedName || savedUser;
       const teacherNameInput = document.getElementById('createTeacherNameInput');
-      if (teacherNameInput && (!teacherNameInput.value || teacherNameInput.value === 'Professor')) {
+      if (teacherNameInput && (!teacherNameInput.value || teacherNameInput.value === 'Professor' || teacherNameInput.value === 'Amrita Faculty')) {
         teacherNameInput.value = savedName || savedUser;
       }
     } else if (teacherAuthLoggedInBox && teacherAuthTabsContainer) {
@@ -602,7 +590,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // --- 7. Teacher Classroom Actions ---
   document.getElementById('confirmCreateClassroomBtn').addEventListener('click', () => {
-    const teacherName = document.getElementById('createTeacherNameInput').value.trim() || 'Professor';
+    const teacherName = document.getElementById('createTeacherNameInput').value.trim() || 'Amrita Faculty';
     const qualityPreset = document.getElementById('createQualitySelect').value;
 
     storage.saveUserProfile({ displayName: teacherName, role: 'teacher', qualityPreset });
@@ -982,7 +970,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           senderId: signaling.clientId,
           roomCode: classroom.sessionCode
         });
-        console.log('[App] Sent request_stream to professor via manual stage entry');
+        console.log('[App] Sent request_stream to Amrita Faculty via manual stage entry');
       }
       showToast('Entered Amrita classroom stage!', 'success');
     });
@@ -1327,13 +1315,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (emptyState) {
       emptyState.style.setProperty('display', 'flex', 'important');
     }
+    if (signaling) {
+      signaling.pendingRemoteStream = null;
+    }
   }
 
-  // Student receives join approval from professor
+  // Student receives join approval from Amrita Faculty
   signaling.onJoinApproved = (msg) => {
     if (classroom.role === 'teacher') return;
 
-    console.log('[App] Join approved by professor:', msg);
+    console.log('[App] Join approved by Amrita Faculty:', msg);
     classroom.isApproved = true;
     classroom.isSessionActive = true;
     classroom.sessionCode = msg.roomCode;
@@ -1361,7 +1352,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     switchView('student');
     startSessionTimer();
-    showToast('🎓 Professor approved your admission! Welcome to Amrita Live Stage.', 'success');
+    showToast('🎓 Amrita Faculty approved your admission! Welcome to Amrita Live Stage.', 'success');
 
     // Immediately activate remote video stream if stream is already received or buffered!
     if (signaling.pendingRemoteStream) {
@@ -1374,7 +1365,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         senderId: signaling.clientId,
         roomCode: classroom.sessionCode
       });
-      console.log('[App] Sent request_stream to professor on admission approval');
+      console.log('[App] Sent request_stream to Amrita Faculty on admission approval');
     }
   };
 
@@ -1385,13 +1376,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     classroom.isSessionActive = false;
     studentWaitingApprovalBox.style.display = 'none';
     studentAutoJoinForm.style.display = 'flex';
-    showToast(msg.reason || 'Professor declined admission request.', 'error');
+    showToast(msg.reason || 'Amrita Faculty declined admission request.', 'error');
   };
 
-  // Student receives kick command from professor -> Broadcast terminates immediately!
+  // Student receives kick command from Amrita Faculty -> Broadcast terminates immediately!
   signaling.onStudentKicked = (msg) => {
     if (classroom.role === 'teacher') return;
-    console.warn('[App] Student was kicked by professor:', msg);
+    console.warn('[App] Student was removed by Amrita Faculty:', msg);
 
     classroom.isApproved = false;
     classroom.isSessionActive = false;
@@ -1414,7 +1405,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Switch view back to gateway
     switchView('landing');
-    showToast(msg.reason || 'You have been removed from the classroom by the professor.', 'warning');
+    showToast(msg.reason || 'You have been removed from the classroom by Amrita Faculty.', 'warning');
   };
 
   // Classroom terminated by host
@@ -1636,7 +1627,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     document.getElementById('btnAlertDecline').onclick = () => {
-      classroom.rejectStudent(student.id, 'Professor declined admission request.');
+      classroom.rejectStudent(student.id, 'Amrita Faculty declined admission request.');
       alertBox.style.display = 'none';
       showToast(`Declined admission for "${student.name}"`, 'warning');
     };
@@ -1926,7 +1917,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function sendChatFromStudent() {
     if (classroom.permissions && classroom.permissions.allowChat === false) {
-      showToast('Chat is currently disabled by the professor.', 'warning');
+      showToast('Chat is currently disabled by Amrita Faculty.', 'warning');
       return;
     }
     const text = studentChatInput.value.trim();
@@ -1950,6 +1941,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (permAllowScreen) {
     permAllowScreen.addEventListener('change', (e) => {
       classroom.updatePermission('allowScreenShare', e.target.checked);
+      if (!e.target.checked && classroom.activePresenterId) {
+        classroom.abortStudentScreenShare();
+      }
       showToast(e.target.checked ? 'Student screen sharing enabled.' : 'Student screen sharing disabled.', 'info');
     });
   }
@@ -1960,7 +1954,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const chatAllowed = perms.allowChat !== false;
       if (studentChatInput) {
         studentChatInput.disabled = !chatAllowed;
-        studentChatInput.placeholder = chatAllowed ? "Message to class..." : "Chat has been disabled by the professor.";
+        studentChatInput.placeholder = chatAllowed ? "Message to class..." : "Chat has been disabled by Amrita Faculty.";
       }
       if (studentChatSendBtn) {
         studentChatSendBtn.disabled = !chatAllowed;
@@ -1968,6 +1962,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       if (!chatAllowed && document.activeElement === studentChatInput) {
         studentChatInput.blur();
+      }
+
+      const screenAllowed = perms.allowScreenShare !== false;
+      const reqScreenBtn = document.getElementById('studentRequestScreenBtn');
+      if (reqScreenBtn) {
+        reqScreenBtn.disabled = !screenAllowed;
+        reqScreenBtn.style.opacity = screenAllowed ? '1' : '0.4';
+        reqScreenBtn.title = screenAllowed ? "Request Amrita Faculty permission to share your screen" : "Screen sharing disabled by Amrita Faculty";
+      }
+      if (!screenAllowed && typeof activeStudentPresenterStream !== 'undefined' && activeStudentPresenterStream) {
+        stopStudentPresenting(false);
       }
     }
   }
@@ -2158,7 +2163,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Teacher granted this student permission to share screen
   signaling.onGrantScreenShare = (msg) => {
     if (typeof showToast === 'function') {
-      showToast('The professor has granted you permission to share your screen!', 'success');
+      showToast('Amrita Faculty has granted you permission to share your screen!', 'success');
     }
     if (studentPresenterBanner) studentPresenterBanner.style.display = 'flex';
     if (studentStartPresentingBtn) studentStartPresentingBtn.style.display = 'inline-block';
@@ -2169,7 +2174,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   signaling.onRevokeScreenShare = () => {
     stopStudentPresenting(true);
     if (typeof showToast === 'function') {
-      showToast('The professor has revoked screen sharing permission.', 'info');
+      showToast('Amrita Faculty has revoked screen sharing permission.', 'info');
     }
   };
 
@@ -2183,6 +2188,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
           stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
         } catch (audioErr) {
+          if (audioErr.name === 'NotAllowedError') {
+            showToast('Screen share dialog was cancelled.', 'info');
+            return;
+          }
           // Fallback: video only (some OS/drivers disallow audio for window share)
           stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
         }
@@ -2190,7 +2199,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         activeStudentPresenterStream = stream;
 
         // Send stream directly to teacher via PeerJS call
-        const teacherPeerId = signaling.teacherPeerId || ('smartclass-room-' + classroom.sessionCode + '-teacher');
+        const roomCode = classroom.sessionCode || signaling.currentRoomCode;
+        const teacherPeerId = signaling.teacherPeerId || ('smartclass-room-' + roomCode + '-teacher');
         if (teacherPeerId && signaling.peer) {
           activeStudentPresenterCall = signaling.peer.call(teacherPeerId, stream);
           console.log('[Student] Sent screen stream call to teacher:', teacherPeerId);
@@ -2232,19 +2242,61 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-    // Stream Status Broadcast Handler
+  // Student clicks "Request Screen"
+  const studentRequestScreenBtn = document.getElementById('studentRequestScreenBtn');
+  if (studentRequestScreenBtn) {
+    studentRequestScreenBtn.addEventListener('click', () => {
+      if (classroom.permissions && classroom.permissions.allowScreenShare === false) {
+        showToast('Screen sharing is currently disabled by Amrita Faculty.', 'warning');
+        return;
+      }
+      if (signaling && signaling.isConnected) {
+        const myName = (studentDisplayNameInput ? studentDisplayNameInput.value.trim() : '') || 'Student';
+        const myRoll = (studentRollNumberInput ? studentRollNumberInput.value.trim() : '') || 'N/A';
+        signaling.send({
+          type: 'request_screen_share',
+          studentId: signaling.clientId,
+          studentName: myName,
+          rollNo: myRoll
+        });
+        showToast('Screen share request sent to Amrita Faculty.', 'info');
+      }
+    });
+  }
+
+  // Teacher handles student screen share request
+  signaling.onRequestScreenShare = (msg) => {
+    if (classroom.role !== 'teacher') return;
+    const reqStudentId = msg.studentId || msg.senderId;
+    const student = classroom.connectedStudents.get(reqStudentId);
+    const name = (student ? student.name : msg.studentName) || 'Student';
+    const roll = (student ? student.rollNo : msg.rollNo) || '';
+    const label = roll ? `${name} [${roll}]` : name;
+    showToast(`🖥️ ${label} requested screen share permission.`, 'info');
+    renderConnectedRoster();
+  };
+
+  // Stream Status Broadcast Handler
   signaling.onStreamStarted = () => {
     if (classroom.role !== 'teacher') {
       showToast('Presenter started screen sharing!', 'info');
-      if (signaling.pendingRemoteStream) {
+      const isPendingLive = signaling.pendingRemoteStream &&
+        signaling.pendingRemoteStream.getTracks &&
+        signaling.pendingRemoteStream.getTracks().some(t => t.readyState === 'live');
+      if (isPendingLive) {
         activateRemoteVideoStream(signaling.pendingRemoteStream);
-      } else if (signaling && signaling.isConnected) {
-        signaling.send({
-          type: 'request_stream',
-          senderId: signaling.clientId,
-          roomCode: classroom.sessionCode
-        });
-        console.log('[App] Sent request_stream to professor on stream start');
+      } else {
+        signaling.pendingRemoteStream = null;
+        setTimeout(() => {
+          if (!signaling.pendingRemoteStream && signaling && signaling.isConnected) {
+            signaling.send({
+              type: 'request_stream',
+              senderId: signaling.clientId,
+              roomCode: classroom.sessionCode || signaling.currentRoomCode
+            });
+            console.log('[App] Sent request_stream to Amrita Faculty on stream start');
+          }
+        }, 1200);
       }
     }
   };

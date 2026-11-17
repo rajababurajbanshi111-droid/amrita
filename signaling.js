@@ -30,7 +30,7 @@ class SignalingManager {
     // Session Identifiers
     this.role = 'student'; // 'teacher' | 'student'
     this.currentRoomCode = null;
-    this.teacherName = 'Professor';
+    this.teacherName = 'Amrita Faculty';
     this.studentName = 'Student';
     this.studentRollNo = 'N/A';
     this.teacherToken = null;
@@ -41,6 +41,7 @@ class SignalingManager {
     // PeerJS Connection State
     this.studentConnections = new Map(); // studentId -> DataConnection
     this.mediaCalls = new Map();         // studentId -> MediaConnection
+    this.incomingStudentCall = null;     // Incoming MediaConnection from presenting student
     this.teacherConn = null;             // DataConnection to teacher
     this.activeStream = null;            // Active screen share stream (if teacher)
     this.pendingRemoteStream = null;     // Remote screen stream buffered for student
@@ -308,7 +309,7 @@ class SignalingManager {
 
   createClassroom(teacherName, roomCode = null) {
     this.role = 'teacher';
-    this.teacherName = teacherName || 'Professor';
+    this.teacherName = teacherName || 'Amrita Faculty';
     this.currentRoomCode = roomCode || (typeof SecurityManager !== 'undefined' ? SecurityManager.generateSessionCode(6) : '123456');
     this.teacherIdRetryCount = 0;
     this.updateBroadcastChannel();
@@ -450,9 +451,14 @@ class SignalingManager {
       // Handle student presentation stream call to teacher
       this.peer.on('call', (call) => {
         console.log('[Signaling] Incoming presentation call from student:', call.peer);
+        if (this.incomingStudentCall && this.incomingStudentCall !== call) {
+          try { this.incomingStudentCall.close(); } catch(e) {}
+        }
+        this.incomingStudentCall = call;
         call.answer();
 
         let compositeStudentStream = null;
+        let hasDispatchedStudentStream = false;
         const handleIncomingStudentStream = (studentStream) => {
           if (!studentStream) return;
           const videoTracks = studentStream.getVideoTracks();
@@ -460,6 +466,10 @@ class SignalingManager {
             console.log('[Signaling] Student stream has no video tracks yet. Waiting for video track...');
             return;
           }
+          if (hasDispatchedStudentStream && this.activeStream === studentStream) {
+            return;
+          }
+          hasDispatchedStudentStream = true;
           console.log('[Signaling] Received live presentation stream from student:', call.peer, 'Video tracks:', videoTracks.length);
           this.activeStream = studentStream;
           if (this.onStudentStreamReceived) {
@@ -508,6 +518,9 @@ class SignalingManager {
 
         call.on('close', () => {
           console.log('[Signaling] Student presentation call closed:', call.peer);
+          if (this.incomingStudentCall === call) {
+            this.incomingStudentCall = null;
+          }
           if (window.classroom && window.classroom.activePresenterId === call.peer) {
             window.classroom.activePresenterId = null;
             this.stopStream();
@@ -519,6 +532,9 @@ class SignalingManager {
 
         call.on('error', (err) => {
           console.warn('[Signaling] Student call error:', call.peer, err);
+          if (this.incomingStudentCall === call) {
+            this.incomingStudentCall = null;
+          }
         });
       });
 
@@ -618,7 +634,7 @@ class SignalingManager {
         console.warn('[Signaling] PeerJS Student error:', err.type, err.message);
         if (err.type === 'peer-unavailable') {
           if (typeof showToast === 'function') {
-            showToast('Room ' + this.currentRoomCode + ' not found. Ensure professor is broadcasting.', 'warning');
+            showToast('Room ' + this.currentRoomCode + ' not found. Ensure Amrita Faculty is broadcasting.', 'warning');
           }
         }
       });
@@ -659,7 +675,7 @@ class SignalingManager {
       if (conn && conn.open) {
         try {
           conn.send(payload);
-          console.log('[Signaling] Sent join request ping to professor over DataConnection');
+          console.log('[Signaling] Sent join request ping to Amrita Faculty over DataConnection');
         } catch(e) {}
       }
 
@@ -670,7 +686,7 @@ class SignalingManager {
     };
 
     conn.on('open', () => {
-      console.log('[Signaling] Data channel connected to professor! Sending join request...');
+      console.log('[Signaling] Data channel connected to Amrita Faculty! Sending join request...');
       if (conn.peerConnection && window.webrtc) {
         window.webrtc.peerConnections.set(teacherPeerId, conn.peerConnection);
       }
@@ -728,6 +744,9 @@ class SignalingManager {
     // Handle incoming screen presentation call from teacher
     this.peer.on('call', (call) => {
       console.log('[Signaling] Incoming presentation call from teacher:', call.peer);
+      if (this.activeMediaCall && this.activeMediaCall !== call) {
+        try { this.activeMediaCall.close(); } catch(e) {}
+      }
       this.activeMediaCall = call;
       call.answer();
 
@@ -913,6 +932,12 @@ class SignalingManager {
       if (this.mediaCalls.has(studentId)) {
         const existingCall = this.mediaCalls.get(studentId);
         if (existingCall) {
+          const pc = existingCall.peerConnection;
+          const isHealthy = existingCall.open || (pc && ['connecting', 'connected'].includes(pc.connectionState));
+          if (isHealthy && existingCall._localStream === this.activeStream) {
+            console.log('[Signaling] Call to student ' + studentId + ' is already active. Keeping existing call.');
+            return;
+          }
           try { existingCall.close(); } catch(e) {}
         }
         this.mediaCalls.delete(studentId);
@@ -939,7 +964,7 @@ class SignalingManager {
     }
   }
 
-  rejectStudent(studentId, reason = 'Professor declined admission request.') {
+  rejectStudent(studentId, reason = 'Amrita Faculty declined admission request.') {
     this.approvedStudents.delete(studentId);
     this.acknowledgedStudents.delete(studentId);
 
@@ -977,7 +1002,7 @@ class SignalingManager {
     return true;
   }
 
-  kickStudent(studentId, reason = 'You have been removed from the classroom by the professor.') {
+  kickStudent(studentId, reason = 'You have been removed from the classroom by Amrita Faculty.') {
     console.log('[Signaling] Kicking student:', studentId);
     this.approvedStudents.delete(studentId);
     this.acknowledgedStudents.delete(studentId);
@@ -1065,6 +1090,10 @@ class SignalingManager {
 
   stopStream() {
     this.activeStream = null;
+    if (this.incomingStudentCall) {
+      try { this.incomingStudentCall.close(); } catch(e) {}
+      this.incomingStudentCall = null;
+    }
     this.mediaCalls.forEach((call) => {
       try { call.close(); } catch (e) {}
     });
@@ -1083,6 +1112,10 @@ class SignalingManager {
 
   revokeStudentScreenShare(studentId) {
     console.log('[Signaling] Revoking screen share from student:', studentId);
+    if (this.incomingStudentCall) {
+      try { this.incomingStudentCall.close(); } catch(e) {}
+      this.incomingStudentCall = null;
+    }
     this.stopStream();
     return this.send({
       type: 'revoke_screen_share',
@@ -1152,7 +1185,7 @@ class SignalingManager {
     // Relay messages across peers if teacher
     if (this.role === 'teacher' && fromPeer && !this.isWsMode) {
       if (msg.type === 'chat_message' && window.classroom && window.classroom.permissions && !window.classroom.permissions.allowChat) {
-        console.warn('[Signaling] Dropping student chat relay because chat is disabled by professor.');
+        console.warn('[Signaling] Dropping student chat relay because chat is disabled by Amrita Faculty.');
         return;
       }
       const shouldRelay = ['chat_message', 'reaction', 'wb_stroke', 'wb_clear', 'announcement', 'raise_hand'].includes(msg.type);
@@ -1196,7 +1229,7 @@ class SignalingManager {
               studentId: this.clientId,
               roomCode: this.currentRoomCode
             });
-            console.log('[Signaling] Sent admission ACK back to professor');
+            console.log('[Signaling] Sent admission ACK back to Amrita Faculty');
           } catch(e) {}
         }
         if (this.onJoinApproved) this.onJoinApproved(msg);
@@ -1205,9 +1238,6 @@ class SignalingManager {
       case 'room_join_ack':
         console.log('[Signaling] Student confirmed admission ACK:', fromPeer || msg.studentId);
         this.acknowledgedStudents.add(fromPeer || msg.studentId);
-        if (this.activeStream && this.peer) {
-          this.dispatchCallToStudent(fromPeer || msg.studentId);
-        }
         break;
 
       case 'room_join_rejected':
@@ -1287,6 +1317,11 @@ class SignalingManager {
         break;
 
       case 'stream_stopped':
+        this.pendingRemoteStream = null;
+        if (this.activeMediaCall) {
+          try { this.activeMediaCall.close(); } catch(e) {}
+          this.activeMediaCall = null;
+        }
         if (this.onStreamStopped) this.onStreamStopped(msg);
         if (typeof deactivateRemoteVideoStream === 'function') {
           deactivateRemoteVideoStream();
@@ -1295,6 +1330,12 @@ class SignalingManager {
 
       case 'file_control':
         if (this.onFileControl) this.onFileControl(msg);
+        break;
+
+      case 'request_screen_share':
+        if (this.role === 'teacher' && this.onRequestScreenShare) {
+          this.onRequestScreenShare(msg);
+        }
         break;
 
       case 'grant_screen_share':
