@@ -632,8 +632,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Auto-detect teacher LAN IP for easy student sharing
   let teacherLanUrl = getAppBaseUrl();
   const bannerLanUrlEl = document.getElementById('teacherBannerLanUrl');
-  if (bannerLanUrlEl) {
-    bannerLanUrlEl.textContent = teacherLanUrl;
+  const teacherLanAccessRow = document.getElementById('teacherLanAccessRow');
+
+  // Prevent GitHub URLs or cloud hostnames from displaying in the UI/UX
+  const isCloudOrGitHub = typeof window !== 'undefined' && window.location && 
+    (/github/i.test(window.location.hostname) || !/^(\d{1,3}\.){3}\d{1,3}$/.test(window.location.hostname));
+
+  if (teacherLanAccessRow && isCloudOrGitHub) {
+    teacherLanAccessRow.style.setProperty('display', 'none', 'important');
   }
 
   async function detectLanNetwork() {
@@ -661,11 +667,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (bannerLanUrlEl) {
               bannerLanUrlEl.textContent = teacherLanUrl;
             }
+            if (teacherLanAccessRow && !/github/i.test(window.location.hostname)) {
+              teacherLanAccessRow.style.removeProperty('display');
+            }
           }
         }
       }
     } catch (e) {
-      // Offline / GitHub Pages fallback: keeps getAppBaseUrl()
+      if (teacherLanAccessRow) {
+        teacherLanAccessRow.style.setProperty('display', 'none', 'important');
+      }
     }
   }
   detectLanNetwork();
@@ -679,7 +690,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     bannerLanUrlEl.addEventListener('click', () => {
       const code = classroom.sessionCode || headerRoomCodeText.textContent;
       const url = getStudentJoinUrl(code);
-      navigator.clipboard.writeText(url).then(() => showToast(`Student Join URL copied: ${url}`, 'success'));
+      navigator.clipboard.writeText(url).then(() => showToast('Student Join URL copied to clipboard!', 'success'));
     });
   }
 
@@ -706,7 +717,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   teacherCopyInviteLinkBtn.addEventListener('click', () => {
     const code = classroom.sessionCode || headerRoomCodeText.textContent;
     const url = getStudentJoinUrl(code);
-    navigator.clipboard.writeText(url).then(() => showToast(`Student invite link copied! (${url})`, 'success'));
+    navigator.clipboard.writeText(url).then(() => showToast('Student invite link copied to clipboard!', 'success'));
   });
 
   teacherEndSessionBtn.addEventListener('click', () => {
@@ -885,6 +896,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       signaling.send({ type: 'stream_stopped' });
     }
   });
+
+  // Handle native browser "Stop sharing" button bar click
+  screenShare.onShareStopped = () => {
+    if (teacherScreenPreview) teacherScreenPreview.srcObject = null;
+    if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'flex';
+    if (teacherStageControls) teacherStageControls.style.display = 'none';
+    if (teacherSidebarScreenDot) teacherSidebarScreenDot.style.display = 'none';
+    if (signaling && signaling.isConnected) {
+      signaling.send({ type: 'stream_stopped' });
+    }
+  };
 
   teacherPauseShareBtn.addEventListener('click', () => {
     const isPaused = screenShare.togglePause();

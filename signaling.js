@@ -775,6 +775,10 @@ class SignalingManager {
             compositeRemoteStream.addTrack(event.track);
           }
           handleRemoteStream(compositeRemoteStream);
+          event.track.onunmute = () => {
+            console.log('[Signaling] Native track unmuted:', event.track.kind);
+            handleRemoteStream(compositeRemoteStream);
+          };
         });
       }
 
@@ -909,39 +913,9 @@ class SignalingManager {
       if (this.mediaCalls.has(studentId)) {
         const existingCall = this.mediaCalls.get(studentId);
         if (existingCall) {
-          const pc = existingCall.peerConnection;
-          const connState = pc ? pc.connectionState : null;
-          const iceState = pc ? pc.iceConnectionState : null;
-
-          // If the media call is already active and connected, replace tracks seamlessly
-          if (existingCall.open || connState === 'connected' || iceState === 'connected' || iceState === 'completed') {
-            console.log('[Signaling] Updating active media call tracks for student:', studentId);
-            const newAudioTrack = this.activeStream.getAudioTracks()[0] || null;
-            let trackReplaced = false;
-
-            if (pc && typeof pc.getSenders === 'function') {
-              const senders = pc.getSenders();
-              senders.forEach((sender) => {
-                if (sender.track && sender.track.kind === 'video' && videoTrack) {
-                  sender.replaceTrack(videoTrack).catch(e => console.warn('replaceTrack video warning:', e));
-                  trackReplaced = true;
-                } else if (sender.track && sender.track.kind === 'audio' && newAudioTrack) {
-                  sender.replaceTrack(newAudioTrack).catch(e => console.warn('replaceTrack audio warning:', e));
-                }
-              });
-            }
-            if (trackReplaced) {
-              return;
-            }
-          } else if (!connState || connState === 'connecting' || connState === 'new' || iceState === 'checking' || iceState === 'new') {
-            // Handshake is still in progress! Do NOT abort or spam new calls!
-            console.log(`[Signaling] Media call to ${studentId} is negotiating (${connState}/${iceState}). Awaiting handshake.`);
-            return;
-          }
-
           try { existingCall.close(); } catch(e) {}
-          this.mediaCalls.delete(studentId);
         }
+        this.mediaCalls.delete(studentId);
       }
 
       console.log('[Signaling] Dispatching fresh media presentation call to student:', studentId);
