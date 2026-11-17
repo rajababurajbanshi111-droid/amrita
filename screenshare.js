@@ -111,8 +111,8 @@ class ScreenShareManager {
         this.signalingManager.broadcastStream(this.activeStream);
       }
 
-      // Register stream with WebRTC manager
-      if (this.webrtcManager) {
+      // Register stream with WebRTC manager (only for WebSocket LAN SFU mode; PeerJS handles media via peer.call)
+      if (this.webrtcManager && this.signalingManager && this.signalingManager.isWsMode) {
         try {
           this.webrtcManager.addLocalStream('screen', this.activeStream);
           await this.webrtcManager.setMaxBitrate(preset.maxBitrate);

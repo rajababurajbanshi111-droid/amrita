@@ -1062,11 +1062,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
 
-  // WebRTC Video Stall Watcher (Only fallback to SFU if running companion Node SFU server, never in serverless mode)
+  // WebRTC Video Stall Watcher (Only fallback to SFU if running companion Node SFU server, never in serverless PeerJS mode)
   studentRemoteVideo.addEventListener('waiting', () => {
-    if (signaling && signaling.isMqttMode) return;
+    if (!signaling || !signaling.isWsMode) return;
     setTimeout(() => {
-      if (studentRemoteVideo.readyState < 2 && currentStreamEngine === 'webrtc' && !(signaling && signaling.isMqttMode)) {
+      if (studentRemoteVideo.readyState < 2 && currentStreamEngine === 'webrtc' && signaling && signaling.isWsMode) {
         console.warn('[App] WebRTC stream stalled. Falling back to SFU relay.');
         setStreamEngine('sfu');
       }
@@ -1475,7 +1475,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function exportAttendanceCSV() {
-    const records = Array.from(sessionAttendance.values());
+    const records = Array.from(sessionAttendance.values()).filter(r => r.status === 'Present');
     if (records.length === 0) {
       if (typeof showToast === 'function') showToast('No attendance records to export yet.', 'warning');
       return;
@@ -1520,6 +1520,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateAttendanceRecord(student, 'Present');
     renderPendingApprovals();
     renderConnectedRoster();
+    if (signaling && signaling.activeStream && classroom.role === 'teacher') {
+      setTimeout(() => {
+        if (typeof signaling.dispatchCallToStudent === 'function') {
+          signaling.dispatchCallToStudent(student.id);
+        }
+      }, 500);
+    }
   };
 
   classroom.onStudentJoinRequested = (student) => {
@@ -1584,9 +1591,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (window.webrtc) {
         try { window.webrtc.closeConnection(studentId); } catch (e) {}
       }
-      // Update attendance record
-      sessionAttendance.forEach((rec) => {
-        if (rec.id === studentId) rec.status = isKicked ? 'Removed' : 'Disconnected';
+      // Purge student completely from attendance roster so leaving participants never appear in attendance or saved file
+      sessionAttendance.delete(studentId);
+      sessionAttendance.forEach((rec, key) => {
+        if (rec.id === studentId) sessionAttendance.delete(key);
       });
       renderAttendanceTable();
     }
@@ -1945,7 +1953,176 @@ document.addEventListener('DOMContentLoaded', async () => {
   router.onReaction = (peerId, payload) => handleIncomingReaction(payload);
   signaling.onReaction = (msg) => handleIncomingReaction(msg.payload || msg);
 
-  // Stream Status Broadcast Handler
+  // =========================================================================
+  // --- SCREEN SHARE COORDINATION: Teacher grants/aborts, Student shares ---
+  // =========================================================================
+
+  // DOM references for screen share banners
+  const teacherAbortStudentShareBtn = document.getElementById('teacherAbortStudentShareBtn');
+  const teacherStudentPresentingBanner = document.getElementById('teacherStudentPresentingBanner');
+  const presentingStudentName = document.getElementById('presentingStudentName');
+  const studentPresenterBanner = document.getElementById('studentPresenterBanner');
+  const studentStartPresentingBtn = document.getElementById('studentStartPresentingBtn');
+  const studentStopPresentingBtn = document.getElementById('studentStopPresentingBtn');
+
+  // Teacher: Abort button on the teacher side
+  if (teacherAbortStudentShareBtn) {
+    teacherAbortStudentShareBtn.addEventListener('click', () => {
+      classroom.abortStudentScreenShare();
+      if (teacherStudentPresentingBanner) teacherStudentPresentingBanner.style.display = 'none';
+      if (teacherScreenPreview) teacherScreenPreview.srcObject = null;
+      if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'flex';
+      renderConnectedRoster();
+      showToast('Aborted student screen share.', 'warning');
+    });
+  }
+
+  // Teacher receives a live stream FROM a student
+  signaling.onStudentStreamReceived = (peerId, studentStream) => {
+    const student = classroom.connectedStudents.get(peerId);
+    const name = student ? student.name : 'Student';
+    showToast(name + ' is now sharing their screen with the classroom!', 'success');
+
+    if (teacherScreenPreview) {
+      teacherScreenPreview.srcObject = studentStream;
+      teacherScreenPreview.play().catch(() => {});
+    }
+    if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'none';
+    // Hide the teacher's own share controls while student is presenting
+    if (teacherStageControls) teacherStageControls.style.display = 'none';
+    if (teacherStudentPresentingBanner) {
+      teacherStudentPresentingBanner.style.display = 'flex';
+      if (presentingStudentName) {
+        presentingStudentName.textContent = name + ' [' + (student ? (student.rollNo || 'N/A') : 'N/A') + ']';
+      }
+    }
+    if (typeof switchTeacherTab === 'function') {
+      switchTeacherTab('screen');
+    }
+    renderConnectedRoster();
+  };
+
+  // Teacher receives notification that student stream stopped
+  signaling.onStudentStreamStopped = (msg) => {
+    const peerId = typeof msg === 'string' ? msg : (msg && (msg.studentId || msg.senderId));
+    if (classroom.role === 'teacher') {
+      if (!peerId || classroom.activePresenterId === peerId) {
+        classroom.activePresenterId = null;
+      }
+      if (teacherStudentPresentingBanner) teacherStudentPresentingBanner.style.display = 'none';
+      // If teacher was not sharing their own screen, restore empty state
+      if (screenShare && screenShare.activeStream && screenShare.isSharing) {
+        if (teacherScreenPreview) teacherScreenPreview.srcObject = screenShare.activeStream;
+        if (teacherStageControls) teacherStageControls.style.display = 'flex';
+        if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'none';
+      } else {
+        if (teacherScreenPreview) teacherScreenPreview.srcObject = null;
+        if (teacherStageControls) teacherStageControls.style.display = 'none';
+        if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'flex';
+      }
+      renderConnectedRoster();
+    }
+  };
+
+  // --- STUDENT SIDE: Handle teacher granting/revoking screen share ---
+  let activeStudentPresenterStream = null;
+  let activeStudentPresenterCall = null;
+
+  function stopStudentPresenting(silent) {
+    if (activeStudentPresenterStream) {
+      activeStudentPresenterStream.getTracks().forEach(t => { try { t.stop(); } catch(e) {} });
+      activeStudentPresenterStream = null;
+    }
+    if (activeStudentPresenterCall) {
+      try { activeStudentPresenterCall.close(); } catch (e) {}
+      activeStudentPresenterCall = null;
+    }
+    if (studentPresenterBanner) studentPresenterBanner.style.display = 'none';
+    if (studentStartPresentingBtn) studentStartPresentingBtn.style.display = 'inline-block';
+    if (studentStopPresentingBtn) studentStopPresentingBtn.style.display = 'none';
+    if (!silent && signaling && signaling.isConnected) {
+      signaling.send({ type: 'student_stream_stopped' });
+    }
+  }
+
+  // Teacher granted this student permission to share screen
+  signaling.onGrantScreenShare = (msg) => {
+    if (typeof showToast === 'function') {
+      showToast('The professor has granted you permission to share your screen!', 'success');
+    }
+    if (studentPresenterBanner) studentPresenterBanner.style.display = 'flex';
+    if (studentStartPresentingBtn) studentStartPresentingBtn.style.display = 'inline-block';
+    if (studentStopPresentingBtn) studentStopPresentingBtn.style.display = 'none';
+  };
+
+  // Teacher revoked screen share permission from this student
+  signaling.onRevokeScreenShare = () => {
+    stopStudentPresenting(true);
+    if (typeof showToast === 'function') {
+      showToast('The professor has revoked screen sharing permission.', 'info');
+    }
+  };
+
+  // Student clicks "Share My Screen"
+  if (studentStartPresentingBtn) {
+    studentStartPresentingBtn.addEventListener('click', async () => {
+      try {
+        if (typeof showToast === 'function') showToast('Select screen, window, or tab to share...', 'info');
+
+        let stream = null;
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        } catch (audioErr) {
+          // Fallback: video only (some OS/drivers disallow audio for window share)
+          stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+        }
+
+        activeStudentPresenterStream = stream;
+
+        // Send stream directly to teacher via PeerJS call
+        const teacherPeerId = signaling.teacherPeerId || ('smartclass-room-' + classroom.sessionCode + '-teacher');
+        if (teacherPeerId && signaling.peer) {
+          activeStudentPresenterCall = signaling.peer.call(teacherPeerId, stream);
+          console.log('[Student] Sent screen stream call to teacher:', teacherPeerId);
+        }
+
+        if (signaling && signaling.isConnected) {
+          signaling.send({ type: 'student_stream_started' });
+        }
+
+        if (studentStartPresentingBtn) studentStartPresentingBtn.style.display = 'none';
+        if (studentStopPresentingBtn) studentStopPresentingBtn.style.display = 'inline-block';
+
+        if (typeof showToast === 'function') {
+          showToast('Your screen is now broadcasting live to the classroom!', 'success');
+        }
+
+        // Auto-stop if browser native stop is clicked
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) {
+          videoTrack.onended = () => {
+            stopStudentPresenting(false);
+            if (typeof showToast === 'function') showToast('Screen sharing ended.', 'info');
+          };
+        }
+      } catch (err) {
+        console.warn('[Student] Screen share selection cancelled or error:', err);
+        if (err.name !== 'NotAllowedError') {
+          if (typeof showToast === 'function') showToast('Screen capture failed: ' + (err.message || 'unknown error'), 'warning');
+        }
+      }
+    });
+  }
+
+  // Student clicks "Stop Sharing"
+  if (studentStopPresentingBtn) {
+    studentStopPresentingBtn.addEventListener('click', () => {
+      stopStudentPresenting(false);
+      if (typeof showToast === 'function') showToast('Stopped sharing your screen.', 'info');
+    });
+  }
+
+    // Stream Status Broadcast Handler
   signaling.onStreamStarted = () => {
     if (classroom.role !== 'teacher') {
       showToast('Presenter started screen sharing!', 'info');
