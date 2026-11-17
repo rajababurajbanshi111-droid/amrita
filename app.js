@@ -1428,19 +1428,57 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
 
   // When Teacher approves student -> Teacher initiates offer to student
+  // Helper: Extract last 2 digits from roll number (or name) for sequential ordering
+  function extractLastTwoDigits(rollNo, name) {
+    const candidates = [rollNo, name];
+    for (const str of candidates) {
+      if (!str || typeof str !== 'string') continue;
+      const match = str.match(/\d+/g);
+      if (match && match.length > 0) {
+        const lastNumStr = match[match.length - 1];
+        const last2 = lastNumStr.length > 2 ? lastNumStr.slice(-2) : lastNumStr;
+        const parsed = parseInt(last2, 10);
+        if (!isNaN(parsed)) return parsed;
+      }
+    }
+    return null;
+  }
+
+  // Comparator: Orders students by last 2 digits of roll number, falling back to arrival time
+  function compareByRollDigits(a, b) {
+    const rollA = a.rollNo || (a.clientInfo && a.clientInfo.rollNo) || '';
+    const rollB = b.rollNo || (b.clientInfo && b.clientInfo.rollNo) || '';
+    const numA = extractLastTwoDigits(rollA, a.name);
+    const numB = extractLastTwoDigits(rollB, b.name);
+
+    if (numA !== null && numB !== null) {
+      if (numA !== numB) return numA - numB;
+    } else if (numA !== null) {
+      return -1;
+    } else if (numB !== null) {
+      return 1;
+    }
+
+    const timeA = a.joinTimestamp || a.joinedAt || a.requestedAt || 0;
+    const timeB = b.joinTimestamp || b.joinedAt || b.requestedAt || 0;
+    return timeA - timeB;
+  }
+
   // --- Real Attendance Tracking & CSV Export Engine ---
   const sessionAttendance = new Map(); // studentId -> { id, name, rollNo, joinTime, status, transport }
 
   function updateAttendanceRecord(student, status = 'Present', transport = null) {
     if (!student || !student.id) return;
     const existing = sessionAttendance.get(student.id);
-    const joinTime = existing ? existing.joinTime : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const joinTimestamp = existing && existing.joinTimestamp ? existing.joinTimestamp : (student.joinedAt || Date.now());
+    const joinTime = existing ? existing.joinTime : new Date(joinTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const studentTransport = transport || (existing && existing.transport) || ((signaling && signaling.isWsMode) ? 'LAN SFU' : 'P2P / LAN');
     sessionAttendance.set(student.id, {
       id: student.id,
       name: student.name || 'Student',
       rollNo: student.rollNo || (student.clientInfo && student.clientInfo.rollNo) || 'N/A',
       joinTime: joinTime,
+      joinTimestamp: joinTimestamp,
       status: status,
       transport: studentTransport
     });
@@ -1454,8 +1492,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const filter = filterInput ? filterInput.value.trim().toLowerCase() : '';
 
     if (!tbody) return;
-    const records = Array.from(sessionAttendance.values()).filter(r => r.status === 'Present');
-    const presentCount = records.filter(r => r.status === 'Present').length;
+    // Sort records in chronological sequence by the last 2 digits of the roll number
+    const records = Array.from(sessionAttendance.values())
+      .filter(r => r.status === 'Present')
+      .sort(compareByRollDigits);
+    const presentCount = records.length;
     if (badge) badge.textContent = `${presentCount} Present`;
 
     const filtered = filter ? records.filter(r => (r.rollNo && r.rollNo.toLowerCase().includes(filter)) || (r.name && r.name.toLowerCase().includes(filter))) : records;
@@ -1492,7 +1533,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function exportAttendanceCSV() {
-    const records = Array.from(sessionAttendance.values()).filter(r => r.status === 'Present');
+    // Sort records in chronological sequence by the last 2 digits of the roll number
+    const records = Array.from(sessionAttendance.values())
+      .filter(r => r.status === 'Present')
+      .sort(compareByRollDigits);
     if (records.length === 0) {
       if (typeof showToast === 'function') showToast('No attendance records to export yet.', 'warning');
       return;
@@ -1721,12 +1765,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.log(`[WebRTC] Peer ${peerId} ICE state:`, iceState);
   };
 
-  // Render Roster & Pending Lists
+  // Render Roster & Pending Lists (Sorted by last 2 digits of Roll Number)
   function renderPendingApprovals() {
     const list = pendingApprovalList;
     if (!list) return;
 
-    const pending = Array.from(classroom.pendingApprovals.values());
+    // Ordered by last 2 digits of roll number, falling back to request time
+    const pending = Array.from(classroom.pendingApprovals.values()).sort(compareByRollDigits);
     teacherPendingBadge.textContent = pending.length;
     teacherPendingCountBadge.textContent = pending.length;
     teacherPendingBadge.style.display = pending.length > 0 ? 'inline-block' : 'none';
@@ -1767,7 +1812,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const list = connectedRosterList;
     if (!list) return;
 
-    const students = Array.from(classroom.connectedStudents.values());
+    // Ordered by last 2 digits of roll number, falling back to joined time
+    const students = Array.from(classroom.connectedStudents.values()).sort(compareByRollDigits);
     if (rosterCount) rosterCount.textContent = students.length;
     if (teacherBannerStudentCount) teacherBannerStudentCount.textContent = `${students.length} / 100`;
     if (teacherKpiStudentCount) teacherKpiStudentCount.innerHTML = `${students.length} <span style="font-size: 1rem; color: var(--text-muted);">/ 100</span>`;
