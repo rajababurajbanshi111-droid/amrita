@@ -254,6 +254,12 @@ class ClassroomManager {
       if (this.router) {
         this.router.broadcastPermissions(this.permissions);
       }
+      if (this.signalingManager && typeof this.signalingManager.send === 'function') {
+        this.signalingManager.send({
+          type: 'permissions_update',
+          permissions: this.permissions
+        });
+      }
       if (this.onPermissionsChanged) {
         this.onPermissionsChanged(this.permissions);
       }

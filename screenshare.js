@@ -65,6 +65,9 @@ class ScreenShareManager {
         audio: !!captureAudio
       });
     } catch (err1) {
+      if (err1 && (err1.name === 'NotAllowedError' || err1.name === 'AbortError')) {
+        throw err1; // User cancelled the screen share prompt; do not prompt again
+      }
       console.warn('[ScreenShare] Tier 1 capture failed or audio disallowed on selected source, attempting video-only fallback:', err1);
       // Strategy 2: Video-only capture with ideal constraints (works when Window is selected or OS blocks display audio)
       try {
@@ -78,6 +81,9 @@ class ScreenShareManager {
           audio: false
         });
       } catch (err2) {
+        if (err2 && (err2.name === 'NotAllowedError' || err2.name === 'AbortError')) {
+          throw err2;
+        }
         console.warn('[ScreenShare] Tier 2 capture failed, attempting bare video fallback:', err2);
         // Strategy 3: Pure bare video constraints (universal compatibility across all browsers/OS)
         stream = await navigator.mediaDevices.getDisplayMedia({

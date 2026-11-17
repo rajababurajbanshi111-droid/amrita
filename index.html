@@ -740,7 +740,7 @@
           <div class="u-s71">
             <h2 class="u-s72">Operating Guide &amp; Network Setup</h2>
 
-            <h4 class="u-s73">1. Stage 1 — Zero-Server Standalone Mode (GitHub Pages)</h4>
+            <h4 class="u-s73">1. Stage 1 — Zero-Server Standalone Mode (Cloud P2P)</h4>
             <p class="u-s74">
               In Zero-Server mode, no backend is needed. Click <strong>Generate Student Join Token</strong> in the dashboard. Copy the token. The student inputs the offer token, generates an answer, and returns it to complete the connection!
             </p>
@@ -1072,7 +1072,7 @@
       </div>
       <div class="u-s47">
         <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">
-          Configure the hosted Node.js backend URL for persistent WebSocket signaling. When running on GitHub Pages, set this to your cloud instance (e.g. Render, Railway, Fly.io, Heroku, or VPS).
+          Configure the hosted Node.js backend URL for persistent WebSocket signaling. When running on a static host, set this to your cloud instance (e.g. Render, Railway, Fly.io, or VPS).
         </p>
         <div>
           <label class="u-s92">Backend HTTP(S) URL</label>
@@ -1216,7 +1216,7 @@
         if (typeof WebRTCManager === 'undefined' || typeof SmartClassroomConfig === 'undefined') {
           var alertBox = document.createElement('div');
           alertBox.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#A41264;border:2px solid #FFA6D8;color:#FFFFFF;padding:16px 28px;border-radius:12px;font-family:sans-serif;font-size:15px;box-shadow:0 10px 30px rgba(0,0,0,0.85);z-index:9999999;text-align:center;max-width:90%;line-height:1.6;';
-          alertBox.innerHTML = '<strong>⚠️ JavaScript modules could not load!</strong><br/>Please make sure <code>index.html</code> on GitHub has been updated with the latest version.';
+          alertBox.innerHTML = '<strong>⚠️ JavaScript modules could not load!</strong><br/>Please make sure all application files have been loaded properly.';
           document.body.appendChild(alertBox);
         }
       }, 1500);

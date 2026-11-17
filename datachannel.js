@@ -50,6 +50,10 @@ class DataChannelRouter {
 
       switch (packet.type) {
         case 'chat':
+          if (window.classroom && window.classroom.permissions && window.classroom.permissions.allowChat === false && packet.payload && packet.payload.senderRole === 'student') {
+            console.warn('[DataChannel] Dropping incoming student chat packet because chat is disabled by professor.');
+            return;
+          }
           if (this.onChatMessage) {
             this.onChatMessage(peerId, packet.payload);
           }

@@ -112,6 +112,14 @@ class SignalingManager {
             ],
             username: 'openrelayproject',
             credential: 'openrelayproject'
+          },
+          {
+            urls: [
+              'turn:eu-0.turn.peerjs.com:3478',
+              'turn:us-0.turn.peerjs.com:3478'
+            ],
+            username: 'peerjs',
+            credential: 'peerjsp'
           }
         ],
         sdpSemantics: 'unified-plan',
@@ -444,9 +452,15 @@ class SignalingManager {
         console.log('[Signaling] Incoming presentation call from student:', call.peer);
         call.answer();
 
+        let compositeStudentStream = null;
         const handleIncomingStudentStream = (studentStream) => {
           if (!studentStream) return;
-          console.log('[Signaling] Received live presentation stream from student:', call.peer);
+          const videoTracks = studentStream.getVideoTracks();
+          if (videoTracks.length === 0) {
+            console.log('[Signaling] Student stream has no video tracks yet. Waiting for video track...');
+            return;
+          }
+          console.log('[Signaling] Received live presentation stream from student:', call.peer, 'Video tracks:', videoTracks.length);
           this.activeStream = studentStream;
           if (this.onStudentStreamReceived) {
             this.onStudentStreamReceived(call.peer, studentStream);
@@ -454,7 +468,8 @@ class SignalingManager {
 
           // Broadcast student's stream to ALL OTHER admitted students
           this.studentConnections.forEach((conn, studentId) => {
-            if (studentId !== call.peer && this.approvedStudents.has(studentId)) {
+            const isAdmitted = this.approvedStudents.has(studentId) || (window.classroom && window.classroom.connectedStudents && window.classroom.connectedStudents.has(studentId));
+            if (studentId !== call.peer && isAdmitted) {
               this.dispatchCallToStudent(studentId);
             }
           });
@@ -468,13 +483,27 @@ class SignalingManager {
 
         if (call.peerConnection) {
           call.peerConnection.addEventListener('track', (event) => {
-            const st = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
-            handleIncomingStudentStream(st);
+            if (!compositeStudentStream) {
+              compositeStudentStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream();
+            }
+            if (!compositeStudentStream.getTracks().some(t => t.id === event.track.id)) {
+              compositeStudentStream.addTrack(event.track);
+            }
+            handleIncomingStudentStream(compositeStudentStream);
           });
         }
 
         call.on('stream', (studentStream) => {
-          handleIncomingStudentStream(studentStream);
+          if (!compositeStudentStream) {
+            compositeStudentStream = studentStream;
+          } else {
+            studentStream.getTracks().forEach(t => {
+              if (!compositeStudentStream.getTracks().some(et => et.id === t.id)) {
+                compositeStudentStream.addTrack(t);
+              }
+            });
+          }
+          handleIncomingStudentStream(compositeStudentStream);
         });
 
         call.on('close', () => {
@@ -718,21 +747,18 @@ class SignalingManager {
       if (classScr) classScr.style.setProperty('display', 'flex', 'important');
       if (typeof switchView === 'function') switchView('student');
 
+      let compositeRemoteStream = null;
       const handleRemoteStream = (rStream) => {
         if (!rStream) return;
-        console.log('[Signaling] Presentation stream ready! Tracks:', rStream.getTracks().length);
+        const vTracks = rStream.getVideoTracks();
+        if (vTracks.length === 0) {
+          console.log('[Signaling] Remote presentation stream waiting for video track...');
+          return;
+        }
+        console.log('[Signaling] Presentation stream ready! Video tracks:', vTracks.length);
         this.pendingRemoteStream = rStream;
         if (typeof activateRemoteVideoStream === 'function') {
           activateRemoteVideoStream(rStream);
-        }
-        if (this.teacherConn && this.teacherConn.open) {
-          try {
-            this.teacherConn.send({
-              type: 'room_join_ack',
-              studentId: this.clientId,
-              roomCode: this.currentRoomCode
-            });
-          } catch(e) {}
         }
       };
 
@@ -742,13 +768,27 @@ class SignalingManager {
         }
         call.peerConnection.addEventListener('track', (event) => {
           console.log('[Signaling] Native RTCPeerConnection track event fired! Kind:', event.track.kind);
-          const rStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
-          handleRemoteStream(rStream);
+          if (!compositeRemoteStream) {
+            compositeRemoteStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream();
+          }
+          if (!compositeRemoteStream.getTracks().some(t => t.id === event.track.id)) {
+            compositeRemoteStream.addTrack(event.track);
+          }
+          handleRemoteStream(compositeRemoteStream);
         });
       }
 
       call.on('stream', (remoteStream) => {
-        handleRemoteStream(remoteStream);
+        if (!compositeRemoteStream) {
+          compositeRemoteStream = remoteStream;
+        } else {
+          remoteStream.getTracks().forEach(t => {
+            if (!compositeRemoteStream.getTracks().some(et => et.id === t.id)) {
+              compositeRemoteStream.addTrack(t);
+            }
+          });
+        }
+        handleRemoteStream(compositeRemoteStream);
       });
 
       call.on('close', () => {
@@ -776,11 +816,14 @@ class SignalingManager {
   // =========================================================================
 
   sendApprovalToStudent(studentId) {
+    this.approvedStudents.add(studentId);
+
     const payload = {
       type: 'room_join_approved',
       roomCode: this.currentRoomCode,
       teacherId: this.clientId,
       recipientId: studentId,
+      permissions: (window.classroom && window.classroom.permissions) ? window.classroom.permissions : null,
       timestamp: Date.now()
     };
 
@@ -857,6 +900,11 @@ class SignalingManager {
 
   dispatchCallToStudent(studentId) {
     if (!this.activeStream || !this.peer) return;
+    const videoTrack = this.activeStream.getVideoTracks()[0];
+    if (!videoTrack) {
+      console.log('[Signaling] Waiting for video track before dispatching call to:', studentId);
+      return;
+    }
     try {
       if (this.mediaCalls.has(studentId)) {
         const existingCall = this.mediaCalls.get(studentId);
@@ -868,15 +916,14 @@ class SignalingManager {
           // If the media call is already active and connected, replace tracks seamlessly
           if (existingCall.open || connState === 'connected' || iceState === 'connected' || iceState === 'completed') {
             console.log('[Signaling] Updating active media call tracks for student:', studentId);
-            const newVideoTrack = this.activeStream.getVideoTracks()[0];
             const newAudioTrack = this.activeStream.getAudioTracks()[0] || null;
             let trackReplaced = false;
 
             if (pc && typeof pc.getSenders === 'function') {
               const senders = pc.getSenders();
               senders.forEach((sender) => {
-                if (sender.track && sender.track.kind === 'video' && newVideoTrack) {
-                  sender.replaceTrack(newVideoTrack).catch(e => console.warn('replaceTrack video warning:', e));
+                if (sender.track && sender.track.kind === 'video' && videoTrack) {
+                  sender.replaceTrack(videoTrack).catch(e => console.warn('replaceTrack video warning:', e));
                   trackReplaced = true;
                 } else if (sender.track && sender.track.kind === 'audio' && newAudioTrack) {
                   sender.replaceTrack(newAudioTrack).catch(e => console.warn('replaceTrack audio warning:', e));
@@ -886,7 +933,7 @@ class SignalingManager {
             if (trackReplaced) {
               return;
             }
-          } else if (connState === 'connecting' || connState === 'new' || iceState === 'checking' || iceState === 'new') {
+          } else if (!connState || connState === 'connecting' || connState === 'new' || iceState === 'checking' || iceState === 'new') {
             // Handshake is still in progress! Do NOT abort or spam new calls!
             console.log(`[Signaling] Media call to ${studentId} is negotiating (${connState}/${iceState}). Awaiting handshake.`);
             return;
@@ -1130,6 +1177,10 @@ class SignalingManager {
 
     // Relay messages across peers if teacher
     if (this.role === 'teacher' && fromPeer && !this.isWsMode) {
+      if (msg.type === 'chat_message' && window.classroom && window.classroom.permissions && !window.classroom.permissions.allowChat) {
+        console.warn('[Signaling] Dropping student chat relay because chat is disabled by professor.');
+        return;
+      }
       const shouldRelay = ['chat_message', 'reaction', 'wb_stroke', 'wb_clear', 'announcement', 'raise_hand'].includes(msg.type);
       if (shouldRelay) {
         this.studentConnections.forEach((conn) => {
@@ -1158,6 +1209,12 @@ class SignalingManager {
 
       case 'room_join_approved':
         this.currentRoomCode = msg.roomCode;
+        if (msg.permissions && window.classroom) {
+          window.classroom.permissions = Object.assign(window.classroom.permissions || {}, msg.permissions);
+          if (typeof window.classroom.onPermissionsChanged === 'function') {
+            window.classroom.onPermissionsChanged(window.classroom.permissions);
+          }
+        }
         if (this.teacherConn && this.teacherConn.open) {
           try {
             this.teacherConn.send({
@@ -1209,11 +1266,27 @@ class SignalingManager {
         break;
 
       case 'chat_message':
+        if (this.role === 'teacher' && window.classroom && window.classroom.permissions && !window.classroom.permissions.allowChat) {
+          console.warn('[Signaling] Dropping chat_message on teacher side because chat is disabled.');
+          return;
+        }
         if (this.onChatMessage) this.onChatMessage(msg);
         break;
 
       case 'announcement':
         if (this.onAnnouncement) this.onAnnouncement(msg);
+        break;
+
+      case 'permissions_update':
+      case 'permission_update':
+      case 'permission_change':
+        const perms = msg.permissions || msg.payload;
+        if (perms && window.classroom) {
+          window.classroom.permissions = Object.assign(window.classroom.permissions || {}, perms);
+          if (typeof window.classroom.onPermissionsChanged === 'function') {
+            window.classroom.onPermissionsChanged(window.classroom.permissions);
+          }
+        }
         break;
 
       case 'raise_hand':
@@ -1227,6 +1300,9 @@ class SignalingManager {
       case 'request_stream':
         const reqStudentId = fromPeer || msg.senderId;
         if (this.role === 'teacher' && this.activeStream && this.peer) {
+          if (window.classroom && window.classroom.activePresenterId === reqStudentId) {
+            return; // Presenting student doesn't need loopback
+          }
           console.log('[Signaling] Student requested stream presentation call. Dispatching to:', reqStudentId);
           this.dispatchCallToStudent(reqStudentId);
         }
@@ -1260,6 +1336,12 @@ class SignalingManager {
         break;
 
       case 'student_stream_stopped':
+        if (this.role === 'teacher') {
+          if (window.classroom) {
+            window.classroom.activePresenterId = null;
+          }
+          this.stopStream();
+        }
         if (this.onStudentStreamStopped) this.onStudentStreamStopped(msg);
         break;
 

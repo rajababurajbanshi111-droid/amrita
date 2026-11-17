@@ -1251,9 +1251,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const videoTracks = typeof stream.getVideoTracks === 'function' ? stream.getVideoTracks() : [];
     if (videoTracks.length === 0) {
       console.log('[Video] Stream has no video tracks yet. Waiting for track...');
-      if (studentVideo && studentVideo.srcObject !== stream) {
-        studentVideo.srcObject = stream;
-      }
       return;
     }
 
@@ -1270,28 +1267,26 @@ document.addEventListener('DOMContentLoaded', async () => {
       studentVideo.setAttribute('muted', '');
       studentVideo.setAttribute('playsinline', '');
 
-      // CRITICAL: Only assign srcObject and call play if stream has changed to prevent AbortError
       if (studentVideo.srcObject !== stream) {
         studentVideo.srcObject = stream;
-        const p = studentVideo.play();
-        if (p !== undefined) {
-          p.then(() => {
-            console.log('[Video] Live presentation playback started successfully.');
-          }).catch((err) => {
-            console.warn('[Video] Playback pending or blocked:', err);
-            if (!hasShownAutoplayNotice && err && err.name === 'NotAllowedError') {
-              hasShownAutoplayNotice = true;
-              showToast('Click anywhere on the presentation stage to enable live audio & video!', 'info');
-              const enablePlay = () => {
-                studentVideo.play().catch(() => {});
-                document.removeEventListener('click', enablePlay);
-              };
-              document.addEventListener('click', enablePlay, { once: true });
-            }
-          });
-        }
-      } else if (studentVideo.paused) {
-        studentVideo.play().catch(() => {});
+      }
+
+      const p = studentVideo.play();
+      if (p !== undefined) {
+        p.then(() => {
+          console.log('[Video] Live presentation playback started successfully.');
+        }).catch((err) => {
+          console.warn('[Video] Playback pending or blocked:', err);
+          if (!hasShownAutoplayNotice && err && err.name === 'NotAllowedError') {
+            hasShownAutoplayNotice = true;
+            showToast('Click anywhere on the presentation stage to enable live audio & video!', 'info');
+            const enablePlay = () => {
+              studentVideo.play().catch(() => {});
+              document.removeEventListener('click', enablePlay);
+            };
+            document.addEventListener('click', enablePlay, { once: true });
+          }
+        });
       }
     }
     if (typeof setStreamEngine === 'function') {
@@ -1862,6 +1857,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function sendChatFromStudent() {
+    if (classroom.permissions && classroom.permissions.allowChat === false) {
+      showToast('Chat is currently disabled by the professor.', 'warning');
+      return;
+    }
     const text = studentChatInput.value.trim();
     if (!text) return;
     const name = storage.getUserProfile().displayName || 'Student';
@@ -1869,6 +1868,49 @@ document.addEventListener('DOMContentLoaded', async () => {
     appendChatMessage(payload, true);
     studentChatInput.value = '';
   }
+
+  // Classroom Permission Controls (Teacher toggles & Student UI synchronizers)
+  const permAllowChat = document.getElementById('permAllowChat');
+  if (permAllowChat) {
+    permAllowChat.addEventListener('change', (e) => {
+      classroom.updatePermission('allowChat', e.target.checked);
+      showToast(e.target.checked ? 'Student chat enabled.' : 'Student chat disabled.', 'info');
+    });
+  }
+
+  const permAllowScreen = document.getElementById('permAllowScreen');
+  if (permAllowScreen) {
+    permAllowScreen.addEventListener('change', (e) => {
+      classroom.updatePermission('allowScreenShare', e.target.checked);
+      showToast(e.target.checked ? 'Student screen sharing enabled.' : 'Student screen sharing disabled.', 'info');
+    });
+  }
+
+  function applyClassroomPermissions(perms) {
+    if (!perms) return;
+    if (classroom.role !== 'teacher') {
+      const chatAllowed = perms.allowChat !== false;
+      if (studentChatInput) {
+        studentChatInput.disabled = !chatAllowed;
+        studentChatInput.placeholder = chatAllowed ? "Message to class..." : "Chat has been disabled by the professor.";
+      }
+      if (studentChatSendBtn) {
+        studentChatSendBtn.disabled = !chatAllowed;
+        studentChatSendBtn.style.opacity = chatAllowed ? '1' : '0.5';
+      }
+      if (!chatAllowed && document.activeElement === studentChatInput) {
+        studentChatInput.blur();
+      }
+    }
+  }
+  classroom.onPermissionsChanged = applyClassroomPermissions;
+
+  router.onPermissionUpdate = (peerId, payload) => {
+    if (classroom.role !== 'teacher' && payload) {
+      classroom.permissions = Object.assign(classroom.permissions || {}, payload);
+      applyClassroomPermissions(classroom.permissions);
+    }
+  };
 
   chatSendBtn.addEventListener('click', sendChatFromTeacher);
   chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChatFromTeacher(); });
