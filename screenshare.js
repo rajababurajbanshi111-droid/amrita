@@ -254,14 +254,14 @@ class ScreenShareManager {
       let isProcessingFrame = false;
       let lastSfuSentTime = 0;
 
-      // Stream frames at ~13-14 FPS (every 75ms) with dynamic backpressure flow control
+      // Stream frames at ~30 FPS (every 33ms) with dynamic backpressure flow control
       this.sfuRelayInterval = setInterval(() => {
         if (!this.activeStream && !streamToRelay) return;
         if (this.isPaused && !streamToRelay) return;
         if (!this.signalingManager || !this.signalingManager.isConnected) return;
 
-        // BACKPRESSURE CHECK: If socket/datachannel buffer has > 64 KB pending, skip this frame
-        if (typeof this.signalingManager.getBufferedAmount === 'function' && this.signalingManager.getBufferedAmount() > 64 * 1024) {
+        // BACKPRESSURE CHECK: If socket/datachannel buffer has > 128 KB pending, skip this frame
+        if (typeof this.signalingManager.getBufferedAmount === 'function' && this.signalingManager.getBufferedAmount() > 128 * 1024) {
           return;
         }
 
@@ -286,8 +286,8 @@ class ScreenShareManager {
           return;
         }
 
-        // Scale to maximum width 1024 for lightweight, instantaneous frames
-        const maxW = 1024;
+        // High Definition Resolution: preserve native aspect ratio up to Full HD 1080p (1920x1080)
+        const maxW = 1920;
         const scale = vw > maxW ? maxW / vw : 1;
         const targetW = Math.round(vw * scale);
         const targetH = Math.round(vh * scale);
@@ -310,8 +310,8 @@ class ScreenShareManager {
           } else {
             isProcessingFrame = false;
           }
-        }, 'image/jpeg', 0.55);
-      }, 75);
+        }, 'image/jpeg', 0.75);
+      }, 33);
 
       console.log('[ScreenShare] SFU Binary Frame Streamer active with universal flow control.');
     } catch (e) {

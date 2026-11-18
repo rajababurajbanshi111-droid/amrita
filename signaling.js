@@ -103,25 +103,10 @@ class SignalingManager {
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' },
           { urls: 'stun:stun.cloudflare.com:3478' },
-          { urls: 'stun:stun.services.mozilla.com:3478' },
-          {
-            urls: [
-              'turn:openrelay.metered.ca:80',
-              'turn:openrelay.metered.ca:443',
-              'turn:openrelay.metered.ca:443?transport=tcp'
-            ],
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          },
-          {
-            urls: [
-              'turn:eu-0.turn.peerjs.com:3478',
-              'turn:us-0.turn.peerjs.com:3478'
-            ],
-            username: 'peerjs',
-            credential: 'peerjsp'
-          }
+          { urls: 'stun:stun.services.mozilla.com:3478' }
         ],
         sdpSemantics: 'unified-plan',
         iceCandidatePoolSize: 4
@@ -197,68 +182,86 @@ class SignalingManager {
   // =========================================================================
 
   tryConnectLocalWebSocket(onSuccess, onFallback) {
-    if (typeof window === 'undefined' || !window.location || !window.location.host || window.location.protocol === 'file:' || window.location.hostname.endsWith('github.io')) {
-      return onFallback();
+    if (typeof window === 'undefined') return onFallback();
+
+    const candidateUrls = [];
+    if (window.location && window.location.host && !window.location.hostname.endsWith('github.io') && window.location.protocol !== 'file:') {
+      const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      candidateUrls.push(`${wsProto}//${window.location.host}/ws`);
     }
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProto}//${window.location.host}/ws`;
-    let opened = false;
-    let ws = null;
-    try {
-      ws = new WebSocket(wsUrl);
-      ws.binaryType = 'arraybuffer';
-    } catch(e) {
-      return onFallback();
+    // Also try local Node server port 3000 when running locally across any browser/port
+    if (window.location && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:')) {
+      if (!candidateUrls.includes('ws://127.0.0.1:3000/ws')) candidateUrls.push('ws://127.0.0.1:3000/ws');
+      if (!candidateUrls.includes('ws://localhost:3000/ws')) candidateUrls.push('ws://localhost:3000/ws');
     }
 
-    const timer = setTimeout(() => {
-      if (!opened) {
-        try { ws.close(); } catch(e) {}
-        onFallback();
-      }
-    }, 1500);
+    if (candidateUrls.length === 0) return onFallback();
 
-    ws.onopen = () => {
-      opened = true;
-      clearTimeout(timer);
-      this.ws = ws;
-      this.isWsMode = true;
-      this.isConnected = true;
-      console.log('[Signaling] Connected to local LAN WebSocket server:', wsUrl);
-      if (this.onServerStatusChange) this.onServerStatusChange(true, 'Local LAN SFU (Port 3000)');
-      this.startHeartbeat();
-      onSuccess();
-    };
-
-    ws.onmessage = (event) => {
-      if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
-        if (typeof this.onBinaryMedia === 'function') {
-          this.onBinaryMedia(event.data);
-        }
-        return;
-      }
+    let currentIndex = 0;
+    const tryNext = () => {
+      if (currentIndex >= candidateUrls.length) return onFallback();
+      const wsUrl = candidateUrls[currentIndex++];
+      let opened = false;
+      let ws = null;
       try {
-        const msg = JSON.parse(event.data);
-        this.handleIncomingMessage(msg);
+        ws = new WebSocket(wsUrl);
+        ws.binaryType = 'arraybuffer';
       } catch(e) {
-        console.warn('[Signaling] Malformed message from LAN server:', e);
+        return tryNext();
       }
-    };
 
-    ws.onerror = () => {
-      if (!opened) {
+      const timer = setTimeout(() => {
+        if (!opened) {
+          try { ws.close(); } catch(e) {}
+          tryNext();
+        }
+      }, 1200);
+
+      ws.onopen = () => {
+        opened = true;
         clearTimeout(timer);
-        onFallback();
-      }
+        this.ws = ws;
+        this.isWsMode = true;
+        this.isConnected = true;
+        console.log('[Signaling] Connected to local LAN WebSocket server:', wsUrl);
+        if (this.onServerStatusChange) this.onServerStatusChange(true, 'Local LAN SFU (Port 3000)');
+        this.startHeartbeat();
+        onSuccess();
+      };
+
+      ws.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
+          if (typeof this.onBinaryMedia === 'function') {
+            this.onBinaryMedia(event.data);
+          }
+          return;
+        }
+        try {
+          const msg = JSON.parse(event.data);
+          this.handleIncomingMessage(msg);
+        } catch(e) {
+          console.warn('[Signaling] Malformed message from LAN server:', e);
+        }
+      };
+
+      ws.onerror = () => {
+        if (!opened) {
+          clearTimeout(timer);
+          try { ws.close(); } catch(e) {}
+          tryNext();
+        }
+      };
+
+      ws.onclose = () => {
+        if (this.isWsMode && opened) {
+          console.warn('[Signaling] LAN WebSocket connection closed.');
+          this.isConnected = false;
+          if (this.onServerStatusChange) this.onServerStatusChange(false, 'Disconnected');
+        }
+      };
     };
 
-    ws.onclose = () => {
-      if (this.isWsMode) {
-        console.warn('[Signaling] LAN WebSocket connection closed.');
-        this.isConnected = false;
-        if (this.onServerStatusChange) this.onServerStatusChange(false, 'Disconnected');
-      }
-    };
+    tryNext();
   }
 
   // =========================================================================
@@ -408,6 +411,13 @@ class SignalingManager {
             if (window.webrtc) {
               window.webrtc.dataChannels.set(conn.peer, conn.dataChannel);
             }
+            conn.dataChannel.addEventListener('message', (evt) => {
+              if (evt.data instanceof ArrayBuffer || evt.data instanceof Blob) {
+                if (typeof this.onBinaryMedia === 'function') {
+                  this.onBinaryMedia(evt.data);
+                }
+              }
+            });
           }
           if (this.approvedStudents.has(conn.peer)) {
             this.sendApprovalToStudent(conn.peer);
@@ -679,7 +689,7 @@ class SignalingManager {
     console.log('[Signaling] Connecting student to teacher:', teacherPeerId);
 
     const conn = this.peer.connect(teacherPeerId, {
-      serialization: 'binary',
+      serialization: 'raw',
       metadata: { studentName: this.studentName, rollNo: this.studentRollNo }
     });
 
@@ -700,10 +710,8 @@ class SignalingManager {
       };
 
       if (conn && conn.open) {
-        try {
-          conn.send(payload);
-          console.log('[Signaling] Sent join request ping to Amrita Faculty over DataConnection');
-        } catch(e) {}
+        this.safePeerSend(conn, payload);
+        console.log('[Signaling] Sent join request ping to Amrita Faculty over DataConnection');
       }
 
       // Also deliver via local BroadcastChannel for same-browser testing
@@ -722,6 +730,13 @@ class SignalingManager {
         if (window.webrtc) {
           window.webrtc.dataChannels.set(teacherPeerId, conn.dataChannel);
         }
+        conn.dataChannel.addEventListener('message', (evt) => {
+          if (evt.data instanceof ArrayBuffer || evt.data instanceof Blob) {
+            if (typeof this.onBinaryMedia === 'function') {
+              this.onBinaryMedia(evt.data);
+            }
+          }
+        });
       }
       sendJoinPing();
     });
@@ -877,8 +892,24 @@ class SignalingManager {
   }
 
   // =========================================================================
-  // Admission Management
+  // Admission Management & Safe Peer Transmission
   // =========================================================================
+
+  safePeerSend(conn, data) {
+    if (!conn) return false;
+    try {
+      const payload = (typeof data === 'string' || data instanceof ArrayBuffer || data instanceof Uint8Array || data instanceof Blob)
+        ? data
+        : JSON.stringify(data);
+      if (conn.open) {
+        conn.send(payload);
+        return true;
+      }
+    } catch (e) {
+      console.warn('[Signaling] safePeerSend error:', e);
+    }
+    return false;
+  }
 
   sendApprovalToStudent(studentId) {
     this.approvedStudents.add(studentId);
@@ -902,18 +933,12 @@ class SignalingManager {
     if (!conn) return;
 
     if (conn.open) {
-      try {
-        conn.send(payload);
-        console.log('[Signaling] Sent room_join_approved to student:', studentId);
-      } catch (e) {
-        console.warn('[Signaling] Error sending room_join_approved:', e);
-      }
+      this.safePeerSend(conn, payload);
+      console.log('[Signaling] Sent room_join_approved to student:', studentId);
     } else {
       const onOpenDeliver = () => {
-        try {
-          conn.send(payload);
-          console.log('[Signaling] Sent room_join_approved on data channel open to student:', studentId);
-        } catch(e) {}
+        this.safePeerSend(conn, payload);
+        console.log('[Signaling] Sent room_join_approved on data channel open to student:', studentId);
       };
       if (typeof conn.once === 'function') {
         conn.once('open', onOpenDeliver);
@@ -1193,32 +1218,19 @@ class SignalingManager {
 
     // 3. Deliver via Student -> Teacher DataConnection
     if (this.role === 'student') {
-      if (this.teacherConn && this.teacherConn.open) {
-        this.teacherConn.send(messageObj);
-        return true;
-      }
-      return false;
+      return this.safePeerSend(this.teacherConn, messageObj);
     }
 
     // 4. Deliver via Teacher -> Specific Student
     if (messageObj.recipientId) {
       const conn = this.studentConnections.get(messageObj.recipientId);
-      if (conn && conn.open) {
-        conn.send(messageObj);
-        return true;
-      }
-      return false;
+      return this.safePeerSend(conn, messageObj);
     }
 
     // 5. Deliver via Teacher -> Broadcast to all Students
     let count = 0;
     this.studentConnections.forEach((conn) => {
-      if (conn && conn.open) {
-        try {
-          conn.send(messageObj);
-          count++;
-        } catch (e) {}
-      }
+      if (this.safePeerSend(conn, messageObj)) count++;
     });
     return count > 0;
   }
@@ -1235,8 +1247,8 @@ class SignalingManager {
       const shouldRelay = ['chat_message', 'reaction', 'wb_stroke', 'wb_clear', 'announcement', 'raise_hand'].includes(msg.type);
       if (shouldRelay) {
         this.studentConnections.forEach((conn) => {
-          if (conn.peer !== fromPeer && conn.open) {
-            try { conn.send(msg); } catch (e) {}
+          if (conn.peer !== fromPeer) {
+            this.safePeerSend(conn, msg);
           }
         });
       }
