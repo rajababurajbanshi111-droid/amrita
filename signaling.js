@@ -760,9 +760,10 @@ class SignalingManager {
       }
       pingCount++;
       sendJoinPing();
-      // If after 4 attempts (4s) conn is still not open, reconnect automatically
-      if (pingCount % 4 === 0 && conn && !conn.open && !conn.destroyed) {
-        console.log('[Signaling] DataChannel connecting slowly, retrying connect to Amrita Faculty...');
+      // Allow WebRTC STUN NAT traversal sufficient time (25s) across separate networks
+      if (pingCount >= 25 && conn && !conn.open && !conn.destroyed) {
+        console.log('[Signaling] DataChannel negotiation took > 25s, refreshing connect to Amrita Faculty...');
+        pingCount = 0;
         try { conn.close(); } catch(e) {}
         this.connectStudentToTeacher();
       }
