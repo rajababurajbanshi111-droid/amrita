@@ -71,7 +71,7 @@ class TeacherAuthManager {
     const defaultUser = process.env.DEFAULT_TEACHER_USER;
     const defaultPass = process.env.DEFAULT_TEACHER_PASS;
     if (defaultUser && defaultPass) {
-      this.register(defaultUser, defaultPass, process.env.DEFAULT_TEACHER_NAME || 'Professor');
+      this.register(defaultUser, defaultPass, process.env.DEFAULT_TEACHER_NAME || 'Amrita Faculty');
       console.log(`[Auth] Seeded default teacher account: ${defaultUser}`);
     }
   }
@@ -457,8 +457,8 @@ class SignalingHandler {
 
     ws.on('message', (data, isBinary) => {
       if (isBinary) {
-        // SFU Canvas Frame Relay: stream binary presentation frame to all students in room
-        if (conn.role === 'teacher' && conn.roomCode) {
+        // SFU Canvas Frame Relay: stream binary presentation frame to all clients in room
+        if (conn.roomCode) {
           this.broadcastBinary(conn.roomCode, data, ws);
         }
         return;
@@ -703,6 +703,78 @@ class SignalingHandler {
             senderId: conn.clientId,
             payload: msg.payload || {}
           });
+        }
+        break;
+      }
+
+      // --- Student Presentation Stream Events ---
+      case 'student_stream_started':
+      case 'student_stream_stopped': {
+        if (conn.roomCode) {
+          this.broadcast(conn.roomCode, {
+            type: msg.type,
+            senderId: conn.clientId,
+            studentId: conn.clientId
+          });
+        }
+        break;
+      }
+
+      // --- Screen Share Permission Delegation & Requests ---
+      case 'request_screen_share': {
+        const session = this.sessionManager.getSession(conn.roomCode);
+        if (session && session.teacherClientId) {
+          const teacherConn = this.clientsById.get(session.teacherClientId);
+          if (teacherConn) {
+            this.send(teacherConn, {
+              type: 'request_screen_share',
+              senderId: conn.clientId,
+              studentId: conn.clientId,
+              studentName: conn.name || msg.studentName || 'Student',
+              rollNo: conn.rollNo || msg.rollNo || 'N/A'
+            });
+          }
+        }
+        break;
+      }
+
+      case 'grant_screen_share':
+      case 'revoke_screen_share': {
+        if (conn.role === 'teacher' && conn.roomCode) {
+          const targetStudentId = msg.studentId || msg.recipientId;
+          const targetStudent = this.clientsById.get(targetStudentId);
+          if (targetStudent) {
+            this.send(targetStudent, {
+              type: msg.type,
+              senderId: conn.clientId,
+              studentId: targetStudentId
+            });
+          }
+        }
+        break;
+      }
+
+      case 'permissions_update': {
+        if (conn.role === 'teacher' && conn.roomCode) {
+          this.broadcast(conn.roomCode, {
+            type: 'permissions_update',
+            permissions: msg.permissions,
+            senderId: conn.clientId
+          });
+        }
+        break;
+      }
+
+      case 'request_stream': {
+        const session = this.sessionManager.getSession(conn.roomCode);
+        if (session && session.teacherClientId) {
+          const teacherConn = this.clientsById.get(session.teacherClientId);
+          if (teacherConn) {
+            this.send(teacherConn, {
+              type: 'request_stream',
+              senderId: conn.clientId
+            });
+          }
         }
         break;
       }

@@ -216,25 +216,36 @@ class ScreenShareManager {
 
   /**
    * SFU Relay Engine: Captures screen frames and streams them as binary blobs
-   * over WebSocket to Render SFU so all students see the screen even across firewalls / NAT.
+   * over WebSocket or DataChannels so all students see the screen even across firewalls / NAT.
    */
-  startSfuRelayStream() {
-    if (!this.signalingManager || !this.activeStream) return;
-    // In Serverless PeerJS / WebRTC mode, screen streaming is 100% direct WebRTC peer-to-peer.
-    // Only stream raw binary canvas frames if connected to a local LAN WebSocket server (isWsMode).
-    if (!this.signalingManager.isWsMode) return;
+  startSfuRelayStream(streamToRelay = null) {
+    const targetStream = streamToRelay || this.activeStream;
+    if (!this.signalingManager || !targetStream) return;
     this.stopSfuRelayStream();
 
     try {
+      // Ensure target stream video track is active
+      const vTrack = targetStream.getVideoTracks ? targetStream.getVideoTracks()[0] : null;
+      if (!vTrack || vTrack.readyState === 'ended') {
+        console.warn('[ScreenShare] Target stream has no live video track for SFU relay.');
+        return;
+      }
+
+      const previewEl = document.getElementById('teacherScreenPreview');
+
+      // Create a dedicated off-stage video element with non-zero dimensions
+      // (ensures Chromium video decoder is NEVER suspended or throttled by compositor)
       this.relayVideoEl = document.createElement('video');
       this.relayVideoEl.muted = true;
       this.relayVideoEl.defaultMuted = true;
       this.relayVideoEl.playsInline = true;
       this.relayVideoEl.setAttribute('muted', '');
       this.relayVideoEl.setAttribute('playsinline', '');
-      this.relayVideoEl.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
-      if (typeof document !== 'undefined' && document.body) document.body.appendChild(this.relayVideoEl);
-      this.relayVideoEl.srcObject = this.activeStream;
+      this.relayVideoEl.style.cssText = 'position:fixed;bottom:0;right:0;width:320px;height:180px;opacity:0.01;pointer-events:none;z-index:-99999;';
+      if (typeof document !== 'undefined' && document.body) {
+        document.body.appendChild(this.relayVideoEl);
+      }
+      this.relayVideoEl.srcObject = targetStream;
       this.relayVideoEl.play().catch(() => {});
 
       this.relayCanvas = document.createElement('canvas');
@@ -243,10 +254,10 @@ class ScreenShareManager {
       let isProcessingFrame = false;
       let lastSfuSentTime = 0;
 
-      // Stream frames at ~13 FPS (every 75ms) with intelligent backpressure flow control
+      // Stream frames at ~13-14 FPS (every 75ms) with dynamic backpressure flow control
       this.sfuRelayInterval = setInterval(() => {
-        if (!this.isSharing || !this.activeStream || this.isPaused) return;
-        if (!this.relayVideoEl || this.relayVideoEl.readyState < 2) return;
+        if (!this.activeStream && !streamToRelay) return;
+        if (this.isPaused && !streamToRelay) return;
         if (!this.signalingManager || !this.signalingManager.isConnected) return;
 
         // BACKPRESSURE CHECK: If socket/datachannel buffer has > 64 KB pending, skip this frame
@@ -257,8 +268,19 @@ class ScreenShareManager {
         if (isProcessingFrame) return; // Drop frame if previous is still compressing
         isProcessingFrame = true;
 
-        const vw = this.relayVideoEl.videoWidth;
-        const vh = this.relayVideoEl.videoHeight;
+        // Select the active, rendered video source:
+        // Prefer previewEl if currently playing targetStream, otherwise use relayVideoEl
+        const videoSource = (previewEl && previewEl.srcObject === targetStream && previewEl.readyState >= 2 && previewEl.videoWidth > 0)
+          ? previewEl
+          : (this.relayVideoEl && this.relayVideoEl.readyState >= 2 && this.relayVideoEl.videoWidth > 0 ? this.relayVideoEl : null);
+
+        if (!videoSource) {
+          isProcessingFrame = false;
+          return;
+        }
+
+        const vw = videoSource.videoWidth;
+        const vh = videoSource.videoHeight;
         if (!vw || !vh) {
           isProcessingFrame = false;
           return;
@@ -275,10 +297,10 @@ class ScreenShareManager {
           this.relayCanvas.height = targetH;
         }
 
-        this.relayCtx.drawImage(this.relayVideoEl, 0, 0, targetW, targetH);
+        this.relayCtx.drawImage(videoSource, 0, 0, targetW, targetH);
 
         this.relayCanvas.toBlob((blob) => {
-          if (blob && this.isSharing && this.signalingManager) {
+          if (blob && (this.isSharing || streamToRelay) && this.signalingManager) {
             blob.arrayBuffer().then((buffer) => {
               this.signalingManager.sendBinary(buffer);
               lastSfuSentTime = Date.now();
@@ -289,9 +311,9 @@ class ScreenShareManager {
             isProcessingFrame = false;
           }
         }, 'image/jpeg', 0.55);
-      }, 90);
+      }, 75);
 
-      console.log('[ScreenShare] SFU Binary Frame Streamer active with dynamic LAN flow control.');
+      console.log('[ScreenShare] SFU Binary Frame Streamer active with universal flow control.');
     } catch (e) {
       console.warn('[ScreenShare] Could not start SFU frame streamer:', e);
     }

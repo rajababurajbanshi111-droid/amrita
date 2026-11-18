@@ -154,15 +154,126 @@ document.addEventListener('DOMContentLoaded', async () => {
   // URL Query Parameter Handling (e.g. ?room=123456)
   const urlParams = new URLSearchParams(window.location.search);
 
-  // Only populate Student Name & Roll Number if explicitly provided via URL query parameters (?name=...&roll=...)
+  // Student Profile History & Comfort Autofill Manager
+  const STUDENT_HISTORY_KEY = 'smartclass_student_history';
+
+  function getStudentHistory() {
+    try {
+      const data = localStorage.getItem(STUDENT_HISTORY_KEY);
+      return data ? JSON.parse(data) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveStudentProfile(name, rollNo) {
+    if (!name || name === 'Student') return;
+    try {
+      let history = getStudentHistory();
+      history = history.filter(item => 
+        item.name.toLowerCase() !== name.toLowerCase() && 
+        (rollNo === 'N/A' || !rollNo || item.rollNo.toLowerCase() !== rollNo.toLowerCase())
+      );
+      history.unshift({ name, rollNo: rollNo || 'N/A', lastUsed: Date.now() });
+      if (history.length > 10) history = history.slice(0, 10);
+      localStorage.setItem(STUDENT_HISTORY_KEY, JSON.stringify(history));
+      renderStudentHistoryUI();
+    } catch (e) {}
+  }
+
+  function renderStudentHistoryUI() {
+    const history = getStudentHistory();
+    const namesDatalist = document.getElementById('studentRecentNamesDatalist');
+    const rollsDatalist = document.getElementById('studentRecentRollsDatalist');
+    const container = document.getElementById('studentRecentProfilesContainer');
+    const pillsContainer = document.getElementById('studentRecentProfilesPills');
+
+    if (namesDatalist) {
+      const uniqueNames = [...new Set(history.map(h => h.name).filter(Boolean))];
+      namesDatalist.innerHTML = uniqueNames.map(n => `<option value="${n}">`).join('');
+    }
+    if (rollsDatalist) {
+      const uniqueRolls = [...new Set(history.map(h => h.rollNo).filter(r => r && r !== 'N/A'))];
+      rollsDatalist.innerHTML = uniqueRolls.map(r => `<option value="${r}">`).join('');
+    }
+
+    if (container && pillsContainer) {
+      if (history.length === 0) {
+        container.style.display = 'none';
+        pillsContainer.innerHTML = '';
+      } else {
+        container.style.display = 'block';
+        pillsContainer.innerHTML = history.slice(0, 4).map(item => {
+          const rollLabel = item.rollNo && item.rollNo !== 'N/A' ? ` (${item.rollNo})` : '';
+          return `<button type="button" class="student-profile-pill" data-name="${item.name}" data-roll="${item.rollNo || ''}">
+            <span>👤 ${item.name}${rollLabel}</span>
+          </button>`;
+        }).join('');
+
+        pillsContainer.querySelectorAll('.student-profile-pill').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const n = btn.getAttribute('data-name');
+            const r = btn.getAttribute('data-roll');
+            if (studentDisplayNameInput && n) studentDisplayNameInput.value = n;
+            if (studentRollNumberInput && r) studentRollNumberInput.value = r;
+          });
+        });
+      }
+    }
+  }
+
+  // Cross-match Name and Roll Number from history
   if (studentDisplayNameInput) {
-    studentDisplayNameInput.value = urlParams.get('name') || '';
+    studentDisplayNameInput.addEventListener('input', () => {
+      const val = studentDisplayNameInput.value.trim().toLowerCase();
+      if (!val) return;
+      const history = getStudentHistory();
+      const match = history.find(h => h.name.toLowerCase() === val);
+      if (match && match.rollNo && match.rollNo !== 'N/A' && studentRollNumberInput) {
+        if (!studentRollNumberInput.value.trim()) {
+          studentRollNumberInput.value = match.rollNo;
+        }
+      }
+    });
   }
+
   if (studentRollNumberInput) {
-    studentRollNumberInput.value = urlParams.get('roll') || urlParams.get('rollNo') || '';
+    studentRollNumberInput.addEventListener('input', () => {
+      const val = studentRollNumberInput.value.trim().toLowerCase();
+      if (!val) return;
+      const history = getStudentHistory();
+      const match = history.find(h => h.rollNo && h.rollNo.toLowerCase() === val);
+      if (match && match.name && studentDisplayNameInput) {
+        if (!studentDisplayNameInput.value.trim()) {
+          studentDisplayNameInput.value = match.name;
+        }
+      }
+    });
   }
-  if (studentRoomCodeInput && !urlParams.has('room')) {
-    studentRoomCodeInput.value = '';
+
+  const studentClearHistoryBtn = document.getElementById('studentClearHistoryBtn');
+  if (studentClearHistoryBtn) {
+    studentClearHistoryBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      localStorage.removeItem(STUDENT_HISTORY_KEY);
+      renderStudentHistoryUI();
+      if (studentDisplayNameInput) studentDisplayNameInput.value = '';
+      if (studentRollNumberInput) studentRollNumberInput.value = '';
+    });
+  }
+
+  // Initialize UI and pre-populate if fields are empty
+  renderStudentHistoryUI();
+  const initHistory = getStudentHistory();
+  if (initHistory.length > 0) {
+    if (studentDisplayNameInput && !studentDisplayNameInput.value.trim() && !urlParams.has('name')) {
+      studentDisplayNameInput.value = initHistory[0].name;
+    }
+    if (studentRollNumberInput && !studentRollNumberInput.value.trim() && !urlParams.has('roll') && !urlParams.has('rollNo')) {
+      if (initHistory[0].rollNo && initHistory[0].rollNo !== 'N/A') {
+        studentRollNumberInput.value = initHistory[0].rollNo;
+      }
+    }
   }
 
   const studentRemoteVideo = document.getElementById('studentRemoteVideo');
@@ -177,6 +288,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const studentClosePanelBtn = document.getElementById('studentClosePanelBtn');
   const studentLeaveClassroomBtn = document.getElementById('studentLeaveClassroomBtn');
   const studentSidePanel = document.getElementById('studentSidePanel');
+  const studentReopenPanelBtn = document.getElementById('studentReopenPanelBtn');
   const studentReactionsLayer = document.getElementById('studentReactionsLayer');
 
   const studentChatLog = document.getElementById('studentChatLog');
@@ -287,6 +399,26 @@ document.addEventListener('DOMContentLoaded', async () => {
         headerRoomPill.style.display = 'flex';
         headerTimerPill.style.display = 'flex';
         headerExitBtn.style.display = 'inline-block';
+
+        if (studentReopenPanelBtn) {
+          const isCollapsed = studentSidePanel && studentSidePanel.classList.contains('collapsed');
+          studentReopenPanelBtn.style.display = isCollapsed ? 'inline-flex' : 'none';
+        }
+
+        // LATE-JOIN SYNC: Request stream broadcast if teacher is already presenting
+        setTimeout(() => {
+          if (classroom.role === 'student' && signaling && signaling.isConnected) {
+            const isLive = studentRemoteVideo && studentRemoteVideo.srcObject && !studentRemoteVideo.paused;
+            if (!isLive && currentStreamEngine === 'none') {
+              signaling.send({
+                type: 'request_stream',
+                senderId: signaling.clientId,
+                roomCode: classroom.sessionCode
+              });
+              console.log('[App] Auto-requested screen presentation stream upon entering stage.');
+            }
+          }
+        }, 350);
       } else {
         studentJoinScreen.style.display = 'flex';
         studentClassroomScreen.style.display = 'none';
@@ -935,6 +1067,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     studentRoomCodeInput.value = code;
+    saveStudentProfile(name, rollNo);
     storage.saveUserProfile({ displayName: name, rollNo: rollNo, role: 'student' });
     classroom.requestJoin(code, name, rollNo);
 
@@ -1085,8 +1218,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Classroom SFU Binary Media Receiver (High Efficiency Fallback Across Any Firewall/NAT)
   signaling.onBinaryMedia = async (data) => {
-    // Only student view renders the incoming binary media
-    if (classroom.role === 'teacher') return;
+    // If teacher is running and a student is actively presenting, render student's presentation
+    if (classroom.role === 'teacher') {
+      if (!classroom.activePresenterId) return;
+      const tCanvas = document.getElementById('teacherFallbackCanvas');
+      try {
+        const blob = data instanceof Blob ? data : new Blob([data], { type: 'image/jpeg' });
+        const imgBitmap = await createImageBitmap(blob);
+        if (tCanvas) {
+          const tCtx = tCanvas.getContext('2d');
+          if (tCanvas.width !== imgBitmap.width || tCanvas.height !== imgBitmap.height) {
+            tCanvas.width = imgBitmap.width;
+            tCanvas.height = imgBitmap.height;
+          }
+          tCtx.drawImage(imgBitmap, 0, 0);
+          tCanvas.style.setProperty('display', 'block', 'important');
+          if (teacherScreenPreview) teacherScreenPreview.style.setProperty('display', 'none', 'important');
+          if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'none';
+        }
+        imgBitmap.close();
+      } catch (e) {}
+      return;
+    }
 
     // LAN / P2P CONGESTION SHIELD:
     // If WebRTC is live and playing, SKIP decoding completely!
@@ -1109,7 +1262,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     try {
       const blob = data instanceof Blob ? data : new Blob([data], { type: 'image/jpeg' });
-      const imgBitmap = await createImageBitmap(blob);
+      let imgBitmap;
+      try {
+        imgBitmap = await createImageBitmap(blob);
+      } catch (bitmapErr) {
+        imgBitmap = await new Promise((resolve, reject) => {
+          const img = new Image();
+          const url = URL.createObjectURL(blob);
+          img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+          img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Image fallback decode failed')); };
+          img.src = url;
+        });
+      }
 
       if (studentFallbackCanvas && studentFallbackCtx) {
         if (studentFallbackCanvas.width !== imgBitmap.width || studentFallbackCanvas.height !== imgBitmap.height) {
@@ -1117,9 +1281,12 @@ document.addEventListener('DOMContentLoaded', async () => {
           studentFallbackCanvas.height = imgBitmap.height;
         }
         studentFallbackCtx.drawImage(imgBitmap, 0, 0);
-        imgBitmap.close();
+        if (typeof imgBitmap.close === 'function') imgBitmap.close();
 
         setStreamEngine('sfu');
+        if (studentStreamEmptyState) {
+          studentStreamEmptyState.style.setProperty('display', 'none', 'important');
+        }
 
         // Calculate incoming SFU FPS
         sfuFrameCount++;
@@ -1130,7 +1297,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           lastSfuFpsCalc = now;
         }
 
-        const resHud = document.getElementById('studentHudResolution');
+        const resHud = document.getElementById('studentHudRes') || document.getElementById('studentHudResolution');
         const fpsHud = document.getElementById('studentHudFps');
         if (resHud) resHud.textContent = `${studentFallbackCanvas.width}x${studentFallbackCanvas.height}`;
         if (fpsHud) fpsHud.textContent = `${currentSfuFps} FPS (SFU)`;
@@ -1162,11 +1329,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     else document.exitFullscreen().catch(() => {});
   });
 
-  studentTogglePanelBtn.addEventListener('click', toggleStudentPanel);
-  studentClosePanelBtn.addEventListener('click', toggleStudentPanel);
+  studentTogglePanelBtn.addEventListener('click', () => toggleStudentPanel());
+  studentClosePanelBtn.addEventListener('click', () => toggleStudentPanel(false));
+  if (studentReopenPanelBtn) {
+    studentReopenPanelBtn.addEventListener('click', () => toggleStudentPanel(true));
+  }
 
-  function toggleStudentPanel() {
-    studentSidePanel.classList.toggle('collapsed');
+  function toggleStudentPanel(forceState) {
+    if (typeof forceState === 'boolean') {
+      studentSidePanel.classList.toggle('collapsed', !forceState);
+    } else {
+      studentSidePanel.classList.toggle('collapsed');
+    }
+    const isCollapsed = studentSidePanel.classList.contains('collapsed');
+    if (studentReopenPanelBtn) {
+      studentReopenPanelBtn.style.display = isCollapsed ? 'inline-flex' : 'none';
+    }
   }
 
   studentLeaveClassroomBtn.addEventListener('click', () => {
@@ -1909,7 +2087,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   function sendChatFromTeacher() {
     const text = chatInput.value.trim();
     if (!text) return;
-    const name = storage.getUserProfile().displayName || 'Professor';
+    const name = storage.getUserProfile().displayName || 'Amrita Faculty';
     const payload = router.broadcastChat(text, name, 'teacher');
     appendChatMessage(payload, true);
     chatInput.value = '';
@@ -2084,8 +2262,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (teacherAbortStudentShareBtn) {
     teacherAbortStudentShareBtn.addEventListener('click', () => {
       classroom.abortStudentScreenShare();
+      if (screenShare) screenShare.stopSfuRelayStream();
       if (teacherStudentPresentingBanner) teacherStudentPresentingBanner.style.display = 'none';
       if (teacherScreenPreview) teacherScreenPreview.srcObject = null;
+      const tCanvas = document.getElementById('teacherFallbackCanvas');
+      if (tCanvas) tCanvas.style.setProperty('display', 'none', 'important');
       if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'flex';
       renderConnectedRoster();
       showToast('Aborted student screen share.', 'warning');
@@ -2099,9 +2280,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     showToast(name + ' is now sharing their screen with the classroom!', 'success');
 
     if (teacherScreenPreview) {
+      teacherScreenPreview.style.setProperty('display', 'block', 'important');
       teacherScreenPreview.srcObject = studentStream;
       teacherScreenPreview.play().catch(() => {});
     }
+    const tCanvas = document.getElementById('teacherFallbackCanvas');
+    if (tCanvas) tCanvas.style.setProperty('display', 'none', 'important');
+
     if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'none';
     // Hide the teacher's own share controls while student is presenting
     if (teacherStageControls) teacherStageControls.style.display = 'none';
@@ -2114,6 +2299,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (typeof switchTeacherTab === 'function') {
       switchTeacherTab('screen');
     }
+    // Universal SFU Relay: Teacher also streams student presentation to all classmates
+    if (screenShare) {
+      screenShare.startSfuRelayStream(studentStream);
+    }
     renderConnectedRoster();
   };
 
@@ -2124,14 +2313,27 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (!peerId || classroom.activePresenterId === peerId) {
         classroom.activePresenterId = null;
       }
+      if (screenShare) {
+        screenShare.stopSfuRelayStream();
+      }
       if (teacherStudentPresentingBanner) teacherStudentPresentingBanner.style.display = 'none';
+      const tCanvas = document.getElementById('teacherFallbackCanvas');
+      if (tCanvas) tCanvas.style.setProperty('display', 'none', 'important');
+
       // If teacher was not sharing their own screen, restore empty state
       if (screenShare && screenShare.activeStream && screenShare.isSharing) {
-        if (teacherScreenPreview) teacherScreenPreview.srcObject = screenShare.activeStream;
+        if (teacherScreenPreview) {
+          teacherScreenPreview.style.setProperty('display', 'block', 'important');
+          teacherScreenPreview.srcObject = screenShare.activeStream;
+        }
         if (teacherStageControls) teacherStageControls.style.display = 'flex';
         if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'none';
+        screenShare.startSfuRelayStream();
       } else {
-        if (teacherScreenPreview) teacherScreenPreview.srcObject = null;
+        if (teacherScreenPreview) {
+          teacherScreenPreview.srcObject = null;
+          teacherScreenPreview.style.setProperty('display', 'block', 'important');
+        }
         if (teacherStageControls) teacherStageControls.style.display = 'none';
         if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'flex';
       }
@@ -2142,8 +2344,86 @@ document.addEventListener('DOMContentLoaded', async () => {
   // --- STUDENT SIDE: Handle teacher granting/revoking screen share ---
   let activeStudentPresenterStream = null;
   let activeStudentPresenterCall = null;
+  let studentSfuInterval = null;
+  let studentRelayVideo = null;
+  let studentRelayCanvas = null;
+  let studentRelayCtx = null;
+
+  function startStudentSfuRelay(stream) {
+    stopStudentSfuRelay();
+    try {
+      studentRelayVideo = document.createElement('video');
+      studentRelayVideo.muted = true;
+      studentRelayVideo.defaultMuted = true;
+      studentRelayVideo.playsInline = true;
+      studentRelayVideo.setAttribute('muted', '');
+      studentRelayVideo.setAttribute('playsinline', '');
+      // Dedicated off-stage video element with non-zero dimensions to guarantee active decoding
+      studentRelayVideo.style.cssText = 'position:fixed;bottom:0;right:0;width:320px;height:180px;opacity:0.01;pointer-events:none;z-index:-99999;';
+      if (document.body) document.body.appendChild(studentRelayVideo);
+      studentRelayVideo.srcObject = stream;
+      studentRelayVideo.play().catch(() => {});
+
+      studentRelayCanvas = document.createElement('canvas');
+      studentRelayCtx = studentRelayCanvas.getContext('2d', { alpha: false });
+
+      let isProcessing = false;
+      studentSfuInterval = setInterval(() => {
+        if (!activeStudentPresenterStream) return;
+        if (!studentRelayVideo || studentRelayVideo.readyState < 2 || !studentRelayVideo.videoWidth) return;
+        if (!signaling || !signaling.isConnected) return;
+        if (typeof signaling.getBufferedAmount === 'function' && signaling.getBufferedAmount() > 64 * 1024) return;
+        if (isProcessing) return;
+        isProcessing = true;
+
+        const vw = studentRelayVideo.videoWidth;
+        const vh = studentRelayVideo.videoHeight;
+        const maxW = 1024;
+        const scale = vw > maxW ? maxW / vw : 1;
+        const tw = Math.round(vw * scale);
+        const th = Math.round(vh * scale);
+        if (studentRelayCanvas.width !== tw || studentRelayCanvas.height !== th) {
+          studentRelayCanvas.width = tw;
+          studentRelayCanvas.height = th;
+        }
+        studentRelayCtx.drawImage(studentRelayVideo, 0, 0, tw, th);
+        studentRelayCanvas.toBlob((blob) => {
+          if (blob && activeStudentPresenterStream && signaling) {
+            blob.arrayBuffer().then((buf) => {
+              signaling.sendBinary(buf);
+            }).catch(() => {}).finally(() => {
+              isProcessing = false;
+            });
+          } else {
+            isProcessing = false;
+          }
+        }, 'image/jpeg', 0.55);
+      }, 75);
+      console.log('[Student] SFU presentation frame relay active to all peers.');
+    } catch (e) {
+      console.warn('[Student] Could not start SFU frame relay:', e);
+    }
+  }
+
+  function stopStudentSfuRelay() {
+    if (studentSfuInterval) {
+      clearInterval(studentSfuInterval);
+      studentSfuInterval = null;
+    }
+    if (studentRelayVideo) {
+      try {
+        studentRelayVideo.pause();
+        studentRelayVideo.srcObject = null;
+        if (studentRelayVideo.parentNode) studentRelayVideo.parentNode.removeChild(studentRelayVideo);
+      } catch (e) {}
+      studentRelayVideo = null;
+    }
+    studentRelayCanvas = null;
+    studentRelayCtx = null;
+  }
 
   function stopStudentPresenting(silent) {
+    stopStudentSfuRelay();
     if (activeStudentPresenterStream) {
       activeStudentPresenterStream.getTracks().forEach(t => { try { t.stop(); } catch(e) {} });
       activeStudentPresenterStream = null;
@@ -2198,13 +2478,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         activeStudentPresenterStream = stream;
 
-        // Send stream directly to teacher via PeerJS call
+        // 1. Send stream directly to teacher via PeerJS call if PeerJS is active
         const roomCode = classroom.sessionCode || signaling.currentRoomCode;
         const teacherPeerId = signaling.teacherPeerId || ('smartclass-room-' + roomCode + '-teacher');
         if (teacherPeerId && signaling.peer) {
           activeStudentPresenterCall = signaling.peer.call(teacherPeerId, stream);
           console.log('[Student] Sent screen stream call to teacher:', teacherPeerId);
         }
+
+        // 2. Launch high-speed SFU frame relay to teacher & all classmates
+        startStudentSfuRelay(stream);
 
         if (signaling && signaling.isConnected) {
           signaling.send({ type: 'student_stream_started' });

@@ -178,9 +178,14 @@ class SignalingManager {
         if (!this.localBroadcast) {
           this.localBroadcast = new BroadcastChannel(chanName);
           this.localBroadcast.onmessage = (event) => {
-            if (event && event.data) {
-              this.handleIncomingMessage(event.data);
+            if (!event || !event.data) return;
+            if (event.data instanceof ArrayBuffer || event.data instanceof Blob || (event.data && event.data.byteLength !== undefined)) {
+              if (typeof this.onBinaryMedia === 'function') {
+                this.onBinaryMedia(event.data);
+              }
+              return;
             }
+            this.handleIncomingMessage(event.data);
           };
         }
       }
@@ -413,9 +418,31 @@ class SignalingManager {
         });
 
         conn.on('data', (data) => {
-          // Binary packet handling for high-speed file transfer
-          if (data instanceof ArrayBuffer || data instanceof Blob || (data && data.byteLength !== undefined)) {
+          // Binary packet handling: distinguish between Screen Share Video Frames (JPEG) and File Transfer
+          if (data instanceof ArrayBuffer || data instanceof Blob || (data && data.byteLength !== undefined) || (data && data.buffer instanceof ArrayBuffer)) {
             const buf = data instanceof Blob ? data : (data instanceof ArrayBuffer ? data : (data.buffer || data));
+            let isJpeg = false;
+            if (buf instanceof Blob) {
+              isJpeg = buf.type === 'image/jpeg';
+            } else if (buf && buf.byteLength >= 3) {
+              const u8 = new Uint8Array(buf);
+              isJpeg = (u8[0] === 0xFF && u8[1] === 0xD8 && u8[2] === 0xFF);
+            }
+
+            if (isJpeg) {
+              // Screen share presentation frame from presenting student!
+              if (typeof this.onBinaryMedia === 'function') {
+                this.onBinaryMedia(buf);
+              }
+              // Relay frame to all other admitted students
+              this.studentConnections.forEach((otherConn, sid) => {
+                if (sid !== conn.peer && otherConn && otherConn.open) {
+                  try { otherConn.send(buf); } catch (e) {}
+                }
+              });
+              return;
+            }
+
             if (window.fileTransfer && typeof window.fileTransfer.handleBinaryChunk === 'function') {
               window.fileTransfer.handleBinaryChunk(conn.peer, buf);
             }
@@ -652,7 +679,7 @@ class SignalingManager {
     console.log('[Signaling] Connecting student to teacher:', teacherPeerId);
 
     const conn = this.peer.connect(teacherPeerId, {
-      serialization: 'json',
+      serialization: 'binary',
       metadata: { studentName: this.studentName, rollNo: this.studentRollNo }
     });
 
@@ -712,6 +739,21 @@ class SignalingManager {
     conn.on('data', (data) => {
       if (data instanceof ArrayBuffer || data instanceof Blob || (data && data.byteLength !== undefined) || (data && data.buffer instanceof ArrayBuffer)) {
         const buf = data instanceof Blob ? data : (data instanceof ArrayBuffer ? data : (data.buffer || data));
+        let isJpeg = false;
+        if (buf instanceof Blob) {
+          isJpeg = buf.type === 'image/jpeg';
+        } else if (buf && buf.byteLength >= 3) {
+          const u8 = new Uint8Array(buf);
+          isJpeg = (u8[0] === 0xFF && u8[1] === 0xD8 && u8[2] === 0xFF);
+        }
+
+        if (isJpeg) {
+          if (typeof this.onBinaryMedia === 'function') {
+            this.onBinaryMedia(buf);
+          }
+          return;
+        }
+
         if (window.fileTransfer && typeof window.fileTransfer.handleBinaryChunk === 'function') {
           window.fileTransfer.handleBinaryChunk(teacherPeerId, buf);
         } else if (typeof this.onBinaryMedia === 'function') {
@@ -847,6 +889,7 @@ class SignalingManager {
       teacherId: this.clientId,
       recipientId: studentId,
       permissions: (window.classroom && window.classroom.permissions) ? window.classroom.permissions : null,
+      isStreaming: !!this.activeStream,
       timestamp: Date.now()
     };
 
@@ -933,8 +976,9 @@ class SignalingManager {
         const existingCall = this.mediaCalls.get(studentId);
         if (existingCall) {
           const pc = existingCall.peerConnection;
-          const isHealthy = existingCall.open || (pc && ['connecting', 'connected'].includes(pc.connectionState));
-          if (isHealthy && existingCall._localStream === this.activeStream) {
+          const isHealthy = existingCall.open || (pc && ['new', 'connecting', 'connected'].includes(pc.connectionState));
+          const existingStream = existingCall.localStream || (existingCall.options && existingCall.options._stream);
+          if (isHealthy && existingStream === this.activeStream) {
             console.log('[Signaling] Call to student ' + studentId + ' is already active. Keeping existing call.');
             return;
           }
@@ -1232,6 +1276,16 @@ class SignalingManager {
             console.log('[Signaling] Sent admission ACK back to Amrita Faculty');
           } catch(e) {}
         }
+        if (msg.isStreaming) {
+          console.log('[Signaling] Amrita Faculty is already streaming! Requesting stream broadcast immediately...');
+          setTimeout(() => {
+            this.send({
+              type: 'request_stream',
+              senderId: this.clientId,
+              roomCode: this.currentRoomCode
+            });
+          }, 200);
+        }
         if (this.onJoinApproved) this.onJoinApproved(msg);
         break;
 
@@ -1309,6 +1363,9 @@ class SignalingManager {
           }
           console.log('[Signaling] Student requested stream presentation call. Dispatching to:', reqStudentId);
           this.dispatchCallToStudent(reqStudentId);
+          if (window.screenShare && typeof window.screenShare.startSfuRelayStream === 'function' && !window.screenShare.sfuRelayInterval) {
+            window.screenShare.startSfuRelayStream();
+          }
         }
         break;
 
@@ -1380,20 +1437,51 @@ class SignalingManager {
   sendBinary(buffer) {
     if (!buffer) return false;
     let sentCount = 0;
+
+    // 1. Same-device cross-tab/window broadcast (0ms instant presentation)
+    if (this.localBroadcast) {
+      try {
+        this.localBroadcast.postMessage(buffer);
+        sentCount++;
+      } catch (e) {}
+    }
+
+    // 2. Local LAN WebSocket Server (Port 3000)
     if (this.isWsMode && this.ws && this.ws.readyState === 1) {
       try {
         this.ws.send(buffer);
         sentCount++;
       } catch (e) {}
     }
+
+    // 3. Deliver to all students if teacher (WebRTC native DataChannel / PeerJS)
     this.studentConnections.forEach((conn) => {
-      if (conn && conn.open) {
+      if (conn) {
         try {
-          conn.send(buffer);
-          sentCount++;
+          if (conn.dataChannel && conn.dataChannel.readyState === 'open') {
+            conn.dataChannel.send(buffer);
+            sentCount++;
+          } else if (conn.open) {
+            conn.send(buffer);
+            sentCount++;
+          }
         } catch (e) {}
       }
     });
+
+    // 4. Deliver to teacher if presenting student in PeerJS mode
+    if (this.teacherConn) {
+      try {
+        if (this.teacherConn.dataChannel && this.teacherConn.dataChannel.readyState === 'open') {
+          this.teacherConn.dataChannel.send(buffer);
+          sentCount++;
+        } else if (this.teacherConn.open) {
+          this.teacherConn.send(buffer);
+          sentCount++;
+        }
+      } catch (e) {}
+    }
+
     return sentCount > 0;
   }
 
@@ -1407,6 +1495,9 @@ class SignalingManager {
         if (conn.dataChannel.bufferedAmount > max) max = conn.dataChannel.bufferedAmount;
       }
     });
+    if (this.teacherConn && this.teacherConn.dataChannel && typeof this.teacherConn.dataChannel.bufferedAmount === 'number') {
+      if (this.teacherConn.dataChannel.bufferedAmount > max) max = this.teacherConn.dataChannel.bufferedAmount;
+    }
     return max;
   }
 

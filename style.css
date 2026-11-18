@@ -3376,3 +3376,51 @@ body {
     height: 60vh;
   }
 }
+
+/* Student Floating Reopen Side Panel Button */
+.student-floating-reopen-panel-btn {
+  position: absolute;
+  top: 1rem;
+  right: 1.25rem;
+  z-index: 50;
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 1.05rem;
+  background: rgba(17, 24, 48, 0.95);
+  border: 1px solid var(--accent-cyan);
+  border-radius: 9999px;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.student-floating-reopen-panel-btn:hover {
+  background: var(--accent-cyan);
+  color: #070b19;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 22px rgba(6, 182, 212, 0.4);
+}
+.student-profile-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  background: rgba(6, 182, 212, 0.12);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  border-radius: 9999px;
+  color: #a5f3fc;
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.student-profile-pill:hover {
+  background: rgba(6, 182, 212, 0.25);
+  border-color: var(--accent-cyan);
+  color: #fff;
+  transform: translateY(-1px);
+}
