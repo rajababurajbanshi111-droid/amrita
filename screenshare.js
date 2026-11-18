@@ -254,64 +254,72 @@ class ScreenShareManager {
       let isProcessingFrame = false;
       let lastSfuSentTime = 0;
 
-      // Stream frames at ~30 FPS (every 33ms) with dynamic backpressure flow control
-      this.sfuRelayInterval = setInterval(() => {
-        if (!this.activeStream && !streamToRelay) return;
-        if (this.isPaused && !streamToRelay) return;
-        if (!this.signalingManager || !this.signalingManager.isConnected) return;
+    // Stream frames at ~30 FPS (every 33ms) with dynamic backpressure flow control
+    const pushFrame = () => {
+      if (!this.activeStream && !streamToRelay) return;
+      if (this.isPaused && !streamToRelay) return;
+      if (!this.signalingManager || !this.signalingManager.isConnected) return;
 
-        // BACKPRESSURE CHECK: If socket/datachannel buffer has > 128 KB pending, skip this frame
-        if (typeof this.signalingManager.getBufferedAmount === 'function' && this.signalingManager.getBufferedAmount() > 128 * 1024) {
-          return;
-        }
+      // BACKPRESSURE CHECK: If socket/datachannel buffer has > 1 MB pending, skip this frame
+      if (typeof this.signalingManager.getBufferedAmount === 'function' && this.signalingManager.getBufferedAmount() > 1024 * 1024) {
+        return;
+      }
 
-        if (isProcessingFrame) return; // Drop frame if previous is still compressing
-        isProcessingFrame = true;
+      if (isProcessingFrame) return; // Drop frame if previous is still compressing
+      isProcessingFrame = true;
 
-        // Select the active, rendered video source:
-        // Prefer previewEl if currently playing targetStream, otherwise use relayVideoEl
-        const videoSource = (previewEl && previewEl.srcObject === targetStream && previewEl.readyState >= 2 && previewEl.videoWidth > 0)
-          ? previewEl
-          : (this.relayVideoEl && this.relayVideoEl.readyState >= 2 && this.relayVideoEl.videoWidth > 0 ? this.relayVideoEl : null);
+      // Select the active, rendered video source:
+      // Prefer previewEl if currently playing targetStream, otherwise use relayVideoEl
+      const videoSource = (previewEl && previewEl.srcObject === targetStream && previewEl.readyState >= 2 && previewEl.videoWidth > 0)
+        ? previewEl
+        : (this.relayVideoEl && this.relayVideoEl.readyState >= 2 && this.relayVideoEl.videoWidth > 0 ? this.relayVideoEl : null);
 
-        if (!videoSource) {
-          isProcessingFrame = false;
-          return;
-        }
+      if (!videoSource) {
+        isProcessingFrame = false;
+        return;
+      }
 
-        const vw = videoSource.videoWidth;
-        const vh = videoSource.videoHeight;
-        if (!vw || !vh) {
-          isProcessingFrame = false;
-          return;
-        }
+      const vw = videoSource.videoWidth;
+      const vh = videoSource.videoHeight;
+      if (!vw || !vh) {
+        isProcessingFrame = false;
+        return;
+      }
 
-        // High Definition Resolution: preserve native aspect ratio up to Full HD 1080p (1920x1080)
-        const maxW = 1920;
-        const scale = vw > maxW ? maxW / vw : 1;
-        const targetW = Math.round(vw * scale);
-        const targetH = Math.round(vh * scale);
+      // Adaptive HD Resolution: 1080p on Local LAN (Port 3000 WebSocket), 720p HD on PeerJS Cloud
+      // (720p at 0.70 quality produces ~35 KB frames, perfectly below WebRTC DataChannel 64 KB MTU!)
+      const isLan = this.signalingManager && this.signalingManager.isWsMode;
+      const maxW = isLan ? 1920 : 1280;
+      const scale = vw > maxW ? maxW / vw : 1;
+      const targetW = Math.round(vw * scale);
+      const targetH = Math.round(vh * scale);
 
-        if (this.relayCanvas.width !== targetW || this.relayCanvas.height !== targetH) {
-          this.relayCanvas.width = targetW;
-          this.relayCanvas.height = targetH;
-        }
+      if (this.relayCanvas.width !== targetW || this.relayCanvas.height !== targetH) {
+        this.relayCanvas.width = targetW;
+        this.relayCanvas.height = targetH;
+      }
 
-        this.relayCtx.drawImage(videoSource, 0, 0, targetW, targetH);
+      this.relayCtx.drawImage(videoSource, 0, 0, targetW, targetH);
 
-        this.relayCanvas.toBlob((blob) => {
-          if (blob && (this.isSharing || streamToRelay) && this.signalingManager) {
-            blob.arrayBuffer().then((buffer) => {
-              this.signalingManager.sendBinary(buffer);
-              lastSfuSentTime = Date.now();
-            }).catch(() => {}).finally(() => {
-              isProcessingFrame = false;
-            });
-          } else {
+      const jpegQuality = isLan ? 0.75 : 0.70;
+      this.relayCanvas.toBlob((blob) => {
+        if (blob && (this.isSharing || streamToRelay) && this.signalingManager) {
+          blob.arrayBuffer().then((buffer) => {
+            this.signalingManager.sendBinary(buffer);
+            lastSfuSentTime = Date.now();
+          }).catch(() => {}).finally(() => {
             isProcessingFrame = false;
-          }
-        }, 'image/jpeg', 0.75);
-      }, 33);
+          });
+        } else {
+          isProcessingFrame = false;
+        }
+      }, 'image/jpeg', jpegQuality);
+    };
+
+    this.sendInstantSnapshot = () => pushFrame();
+    this.sfuRelayInterval = setInterval(pushFrame, 33);
+    // Immediately emit first frame
+    setTimeout(pushFrame, 50);
 
       console.log('[ScreenShare] SFU Binary Frame Streamer active with universal flow control.');
     } catch (e) {

@@ -1095,16 +1095,36 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (studentClassroomScreen) studentClassroomScreen.style.setProperty('display', 'flex', 'important');
       switchView('student');
       startSessionTimer();
-      if (signaling.pendingRemoteStream) {
-        activateRemoteVideoStream(signaling.pendingRemoteStream);
-      } else if (signaling && signaling.isConnected) {
+
+      // Ensure student connection to teacher is active
+      if (signaling) {
+        if (!signaling.teacherConn || !signaling.teacherConn.open) {
+          signaling.connectStudentToTeacher();
+        }
         signaling.send({
           type: 'request_stream',
           senderId: signaling.clientId,
-          roomCode: classroom.sessionCode
+          roomCode: classroom.sessionCode || signaling.currentRoomCode
         });
         console.log('[App] Sent request_stream to Amrita Faculty via manual stage entry');
       }
+
+      if (signaling && signaling.pendingRemoteStream) {
+        activateRemoteVideoStream(signaling.pendingRemoteStream);
+      } else if (studentRemoteVideo && studentRemoteVideo.srcObject) {
+        activateRemoteVideoStream(studentRemoteVideo.srcObject);
+      }
+
+      setTimeout(() => {
+        if (currentStreamEngine === 'none' && signaling && signaling.isConnected) {
+          signaling.send({
+            type: 'request_stream',
+            senderId: signaling.clientId,
+            roomCode: classroom.sessionCode || signaling.currentRoomCode
+          });
+        }
+      }, 1200);
+
       showToast('Entered Amrita classroom stage!', 'success');
     });
   }
@@ -1205,16 +1225,57 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
 
-  // WebRTC Video Stall Watcher (Only fallback to SFU if running companion Node SFU server, never in serverless PeerJS mode)
-  studentRemoteVideo.addEventListener('waiting', () => {
-    if (!signaling || !signaling.isWsMode) return;
-    setTimeout(() => {
-      if (studentRemoteVideo.readyState < 2 && currentStreamEngine === 'webrtc' && signaling && signaling.isWsMode) {
-        console.warn('[App] WebRTC stream stalled. Falling back to SFU relay.');
-        setStreamEngine('sfu');
+  // Dynamic WebRTC Playback & Stall Watcher (Universal: works on LAN WebSocket & GitHub Pages PeerJS)
+  let lastVideoTime = 0;
+  let lastVideoProgressStamp = Date.now();
+  let videoStallCheckInterval = null;
+
+  studentRemoteVideo.addEventListener('timeupdate', () => {
+    if (studentRemoteVideo.currentTime > lastVideoTime) {
+      lastVideoTime = studentRemoteVideo.currentTime;
+      lastVideoProgressStamp = Date.now();
+      // If WebRTC is actively playing frames, ensure WebRTC engine is active!
+      if (studentRemoteVideo.videoWidth > 0 && currentStreamEngine !== 'webrtc') {
+        console.log('[App] WebRTC video rendering detected! Switching to WebRTC engine.');
+        setStreamEngine('webrtc');
       }
-    }, 4000);
+    }
   });
+
+  studentRemoteVideo.addEventListener('waiting', () => {
+    // If stalled for > 2500ms, switch to SFU canvas fallback
+    setTimeout(() => {
+      if (Date.now() - lastVideoProgressStamp >= 2500 && currentStreamEngine === 'webrtc') {
+        const sfuCanvas = document.getElementById('studentFallbackCanvas');
+        if (sfuCanvas && sfuCanvas.width > 0) {
+          console.warn('[App] WebRTC stream stalled. Falling back to SFU relay.');
+          setStreamEngine('sfu');
+        }
+      }
+    }, 2500);
+  });
+
+  // Global stall watchdog: ensures student NEVER sees a frozen or blank stage
+  if (videoStallCheckInterval) clearInterval(videoStallCheckInterval);
+  videoStallCheckInterval = setInterval(() => {
+    if (classroom.role === 'teacher' || !classroom.isApproved || !classroom.isSessionActive) return;
+    const isWebrtcPlaying = studentRemoteVideo.srcObject && 
+                           !studentRemoteVideo.paused && 
+                           studentRemoteVideo.readyState >= 2 && 
+                           studentRemoteVideo.videoWidth > 0 && 
+                           (Date.now() - lastVideoProgressStamp < 3500);
+
+    const sfuCanvas = document.getElementById('studentFallbackCanvas');
+    const hasSfuFrames = sfuCanvas && sfuCanvas.width > 0;
+
+    if (!isWebrtcPlaying && hasSfuFrames && currentStreamEngine !== 'sfu') {
+      console.log('[App] Watchdog: WebRTC not playing, falling back to active SFU canvas.');
+      setStreamEngine('sfu');
+    } else if (isWebrtcPlaying && currentStreamEngine !== 'webrtc') {
+      console.log('[App] Watchdog: WebRTC playing smoothly, activating WebRTC.');
+      setStreamEngine('webrtc');
+    }
+  }, 2000);
 
   // Classroom SFU Binary Media Receiver (High Efficiency Fallback Across Any Firewall/NAT)
   signaling.onBinaryMedia = async (data) => {
@@ -1242,12 +1303,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // LAN / P2P CONGESTION SHIELD:
-    // If WebRTC is live and playing, SKIP decoding completely!
-    // This saves 100% of GPU/CPU decoding and eliminates screen freezing on LAN!
+    // If WebRTC is live, decoded, and actively rendering video frames, SKIP CPU decoding!
     const isWebRtcLive = studentRemoteVideo.srcObject && 
                          studentRemoteVideo.srcObject.getVideoTracks().some((t) => t.readyState === 'live' && t.enabled) &&
                          !studentRemoteVideo.paused &&
-                         studentRemoteVideo.readyState >= 2;
+                         studentRemoteVideo.readyState >= 2 &&
+                         studentRemoteVideo.videoWidth > 0;
 
     if (isWebRtcLive) {
       if (currentStreamEngine !== 'webrtc') {
@@ -1486,6 +1547,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   function deactivateRemoteVideoStream() {
     const studentVideo = document.getElementById('studentRemoteVideo');
     const emptyState = document.getElementById('studentStreamEmptyState');
+    const sfuCanvas = document.getElementById('studentFallbackCanvas');
+
+    // Never blank or hide canvas if SFU frame relay is currently displaying
+    if (sfuCanvas && sfuCanvas.style.display !== 'none' && currentStreamEngine === 'sfu') {
+      return;
+    }
+
     if (studentVideo) {
       studentVideo.srcObject = null;
       studentVideo.style.setProperty('display', 'none', 'important');
@@ -1496,6 +1564,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (signaling) {
       signaling.pendingRemoteStream = null;
     }
+    currentStreamEngine = 'none';
   }
 
   // Student receives join approval from Amrita Faculty
@@ -1541,9 +1610,21 @@ document.addEventListener('DOMContentLoaded', async () => {
       signaling.send({
         type: 'request_stream',
         senderId: signaling.clientId,
-        roomCode: classroom.sessionCode
+        roomCode: classroom.sessionCode || signaling.currentRoomCode
       });
       console.log('[App] Sent request_stream to Amrita Faculty on admission approval');
+      // Schedule safety checks to re-request if video has not yet started
+      const retryRequest = () => {
+        if (currentStreamEngine === 'none' && signaling && signaling.isConnected) {
+          signaling.send({
+            type: 'request_stream',
+            senderId: signaling.clientId,
+            roomCode: classroom.sessionCode || signaling.currentRoomCode
+          });
+        }
+      };
+      setTimeout(retryRequest, 1000);
+      setTimeout(retryRequest, 2500);
     }
   };
 

@@ -467,17 +467,23 @@ class SignalingManager {
         });
 
         conn.on('close', () => {
-          console.log('[Signaling] Student disconnected:', conn.peer);
-          this.studentConnections.delete(conn.peer);
-          this.approvedStudents.delete(conn.peer);
-          this.acknowledgedStudents.delete(conn.peer);
-          if (this.mediaCalls.has(conn.peer)) {
-            try { this.mediaCalls.get(conn.peer).close(); } catch(e) {}
-            this.mediaCalls.delete(conn.peer);
-          }
-          if (this.onStudentLeft) {
-            this.onStudentLeft({ studentId: conn.peer });
-          }
+          console.log('[Signaling] Student connection closed:', conn.peer);
+          // Graceful reconnection retention: keep student in approved list for 90s to tolerate mobile/Wi-Fi blips
+          setTimeout(() => {
+            const currentConn = this.studentConnections.get(conn.peer);
+            if (!currentConn || currentConn === conn) {
+              this.studentConnections.delete(conn.peer);
+              this.approvedStudents.delete(conn.peer);
+              this.acknowledgedStudents.delete(conn.peer);
+              if (this.mediaCalls.has(conn.peer)) {
+                try { this.mediaCalls.get(conn.peer).close(); } catch(e) {}
+                this.mediaCalls.delete(conn.peer);
+              }
+              if (this.onStudentLeft) {
+                this.onStudentLeft({ studentId: conn.peer });
+              }
+            }
+          }, 90000);
         });
 
         conn.on('error', (err) => {
@@ -730,26 +736,37 @@ class SignalingManager {
         if (window.webrtc) {
           window.webrtc.dataChannels.set(teacherPeerId, conn.dataChannel);
         }
-        conn.dataChannel.addEventListener('message', (evt) => {
-          if (evt.data instanceof ArrayBuffer || evt.data instanceof Blob) {
-            if (typeof this.onBinaryMedia === 'function') {
-              this.onBinaryMedia(evt.data);
-            }
-          }
-        });
       }
       sendJoinPing();
+
+      // Flush any queued messages that were pending channel open
+      if (Array.isArray(this.sendQueue) && this.sendQueue.length > 0) {
+        console.log(`[Signaling] Flushing ${this.sendQueue.length} queued messages to teacher.`);
+        while (this.sendQueue.length > 0) {
+          const queued = this.sendQueue.shift();
+          this.safePeerSend(conn, queued);
+        }
+      }
     });
 
     // Periodic join request ping while waiting for admission approval
+    let pingCount = 0;
+    if (this.studentJoinInterval) clearInterval(this.studentJoinInterval);
     this.studentJoinInterval = setInterval(() => {
       if (window.classroom && window.classroom.isApproved) {
         clearInterval(this.studentJoinInterval);
         this.studentJoinInterval = null;
         return;
       }
+      pingCount++;
       sendJoinPing();
-    }, 1500);
+      // If after 4 attempts (4s) conn is still not open, reconnect automatically
+      if (pingCount % 4 === 0 && conn && !conn.open && !conn.destroyed) {
+        console.log('[Signaling] DataChannel connecting slowly, retrying connect to Amrita Faculty...');
+        try { conn.close(); } catch(e) {}
+        this.connectStudentToTeacher();
+      }
+    }, 1000);
 
     conn.on('data', (data) => {
       if (data instanceof ArrayBuffer || data instanceof Blob || (data && data.byteLength !== undefined) || (data && data.buffer instanceof ArrayBuffer)) {
@@ -786,12 +803,19 @@ class SignalingManager {
     });
 
     conn.on('close', () => {
-      console.warn('[Signaling] Connection to teacher lost.');
-      if (this.onRoomTerminated) this.onRoomTerminated();
+      console.warn('[Signaling] Connection to teacher closed. Scheduling auto-reconnect...');
+      if (window.classroom && window.classroom.isSessionActive) {
+        setTimeout(() => {
+          if (window.classroom && window.classroom.isSessionActive) {
+            console.log('[Signaling] Auto-reconnecting student to teacher session...');
+            this.connectStudentToTeacher();
+          }
+        }, 1500);
+      }
     });
 
     conn.on('error', (err) => {
-      console.error('[Signaling] Teacher connection error:', err);
+      console.warn('[Signaling] Teacher connection notice:', err);
     });
   }
 
@@ -805,7 +829,6 @@ class SignalingManager {
         try { this.activeMediaCall.close(); } catch(e) {}
       }
       this.activeMediaCall = call;
-      call.answer();
 
       // Teacher initiating media call confirms admission! Unlock stage immediately!
       if (window.classroom) {
@@ -838,6 +861,42 @@ class SignalingManager {
         }
       };
 
+      // Register stream and error listeners BEFORE answering call
+      call.on('stream', (remoteStream) => {
+        console.log('[Signaling] PeerJS call.on(stream) fired!');
+        if (!compositeRemoteStream) {
+          compositeRemoteStream = remoteStream;
+        } else {
+          remoteStream.getTracks().forEach(t => {
+            if (!compositeRemoteStream.getTracks().some(et => et.id === t.id)) {
+              compositeRemoteStream.addTrack(t);
+            }
+          });
+        }
+        handleRemoteStream(compositeRemoteStream);
+      });
+
+      call.on('close', () => {
+        console.log('[Signaling] Presentation call closed by teacher');
+        if (this.activeMediaCall === call) {
+          this.activeMediaCall = null;
+          // Only blank stream if not actively decoding SFU frames
+          const sfuCanvas = document.getElementById('studentFallbackCanvas');
+          const isSfuRendering = sfuCanvas && sfuCanvas.style.display !== 'none';
+          if (!isSfuRendering && typeof deactivateRemoteVideoStream === 'function') {
+            deactivateRemoteVideoStream();
+          }
+        }
+      });
+
+      call.on('error', (err) => {
+        console.warn('[Signaling] Student incoming media call error:', err);
+      });
+
+      // Answer call
+      call.answer();
+
+      // Inspect RTCPeerConnection tracks immediately
       if (call.peerConnection) {
         if (window.webrtc) {
           window.webrtc.peerConnections.set('media-' + call.peer, call.peerConnection);
@@ -856,38 +915,21 @@ class SignalingManager {
             handleRemoteStream(compositeRemoteStream);
           };
         });
-      }
 
-      call.on('stream', (remoteStream) => {
-        if (!compositeRemoteStream) {
-          compositeRemoteStream = remoteStream;
-        } else {
-          remoteStream.getTracks().forEach(t => {
-            if (!compositeRemoteStream.getTracks().some(et => et.id === t.id)) {
-              compositeRemoteStream.addTrack(t);
+        // Also check if receivers already hold tracks
+        try {
+          const receivers = call.peerConnection.getReceivers();
+          receivers.forEach(r => {
+            if (r.track) {
+              if (!compositeRemoteStream) compositeRemoteStream = new MediaStream();
+              if (!compositeRemoteStream.getTracks().some(t => t.id === r.track.id)) {
+                compositeRemoteStream.addTrack(r.track);
+              }
+              handleRemoteStream(compositeRemoteStream);
             }
           });
-        }
-        handleRemoteStream(compositeRemoteStream);
-      });
-
-      call.on('close', () => {
-        console.log('[Signaling] Presentation call closed by teacher');
-        if (this.activeMediaCall === call) {
-          this.activeMediaCall = null;
-          this.pendingRemoteStream = null;
-          if (typeof deactivateRemoteVideoStream === 'function') {
-            deactivateRemoteVideoStream();
-          }
-        }
-      });
-
-      call.on('error', (err) => {
-        console.warn('[Signaling] Student incoming media call error:', err);
-        if (this.activeMediaCall === call) {
-          this.activeMediaCall = null;
-        }
-      });
+        } catch(e) {}
+      }
     });
   }
 
@@ -935,7 +977,8 @@ class SignalingManager {
     if (conn.open) {
       this.safePeerSend(conn, payload);
       console.log('[Signaling] Sent room_join_approved to student:', studentId);
-    } else {
+    } else if (!conn._hasApprovalOpenListener) {
+      conn._hasApprovalOpenListener = true;
       const onOpenDeliver = () => {
         this.safePeerSend(conn, payload);
         console.log('[Signaling] Sent room_join_approved on data channel open to student:', studentId);
@@ -1001,10 +1044,17 @@ class SignalingManager {
         const existingCall = this.mediaCalls.get(studentId);
         if (existingCall) {
           const pc = existingCall.peerConnection;
-          const isHealthy = existingCall.open || (pc && ['new', 'connecting', 'connected'].includes(pc.connectionState));
-          const existingStream = existingCall.localStream || (existingCall.options && existingCall.options._stream);
-          if (isHealthy && existingStream === this.activeStream) {
-            console.log('[Signaling] Call to student ' + studentId + ' is already active. Keeping existing call.');
+          const isPendingOrOpen = !existingCall.destroyed && (
+            existingCall.open || 
+            !pc || 
+            ['new', 'connecting', 'connected'].includes(pc.connectionState || pc.iceConnectionState)
+          );
+          const callAge = Date.now() - (existingCall._createdAt || 0);
+          if (isPendingOrOpen && callAge < 6000) {
+            console.log('[Signaling] Call to student ' + studentId + ' was dispatched recently (' + callAge + 'ms ago). Retaining active call.');
+            if (window.screenShare && typeof window.screenShare.sendInstantSnapshot === 'function') {
+              window.screenShare.sendInstantSnapshot();
+            }
             return;
           }
           try { existingCall.close(); } catch(e) {}
@@ -1015,7 +1065,13 @@ class SignalingManager {
       console.log('[Signaling] Dispatching fresh media presentation call to student:', studentId);
       const call = this.peer.call(studentId, this.activeStream);
       if (!call) return;
+      call._createdAt = Date.now();
       this.mediaCalls.set(studentId, call);
+
+      // Also immediately push an SFU binary frame snapshot for instant presentation
+      if (window.screenShare && typeof window.screenShare.sendInstantSnapshot === 'function') {
+        window.screenShare.sendInstantSnapshot();
+      }
 
       call.on('close', () => {
         if (this.mediaCalls.get(studentId) === call) {
@@ -1218,7 +1274,13 @@ class SignalingManager {
 
     // 3. Deliver via Student -> Teacher DataConnection
     if (this.role === 'student') {
-      return this.safePeerSend(this.teacherConn, messageObj);
+      if (this.teacherConn && this.teacherConn.open) {
+        return this.safePeerSend(this.teacherConn, messageObj);
+      }
+      // Buffer outgoing messages if data channel is still opening or reconnecting
+      if (!Array.isArray(this.sendQueue)) this.sendQueue = [];
+      this.sendQueue.push(messageObj);
+      return true;
     }
 
     // 4. Deliver via Teacher -> Specific Student
@@ -1280,7 +1342,7 @@ class SignalingManager {
         }
         if (this.teacherConn && this.teacherConn.open) {
           try {
-            this.teacherConn.send({
+            this.safePeerSend(this.teacherConn, {
               type: 'room_join_ack',
               studentId: this.clientId,
               roomCode: this.currentRoomCode
@@ -1375,8 +1437,13 @@ class SignalingManager {
           }
           console.log('[Signaling] Student requested stream presentation call. Dispatching to:', reqStudentId);
           this.dispatchCallToStudent(reqStudentId);
-          if (window.screenShare && typeof window.screenShare.startSfuRelayStream === 'function' && !window.screenShare.sfuRelayInterval) {
-            window.screenShare.startSfuRelayStream();
+          if (window.screenShare) {
+            if (typeof window.screenShare.startSfuRelayStream === 'function' && !window.screenShare.sfuRelayInterval) {
+              window.screenShare.startSfuRelayStream();
+            }
+            if (typeof window.screenShare.sendInstantSnapshot === 'function') {
+              window.screenShare.sendInstantSnapshot();
+            }
           }
         }
         break;
@@ -1471,8 +1538,10 @@ class SignalingManager {
       if (conn) {
         try {
           if (conn.dataChannel && conn.dataChannel.readyState === 'open') {
-            conn.dataChannel.send(buffer);
-            sentCount++;
+            if (typeof conn.dataChannel.bufferedAmount !== 'number' || conn.dataChannel.bufferedAmount < 512 * 1024) {
+              conn.dataChannel.send(buffer);
+              sentCount++;
+            }
           } else if (conn.open) {
             conn.send(buffer);
             sentCount++;
@@ -1485,8 +1554,10 @@ class SignalingManager {
     if (this.teacherConn) {
       try {
         if (this.teacherConn.dataChannel && this.teacherConn.dataChannel.readyState === 'open') {
-          this.teacherConn.dataChannel.send(buffer);
-          sentCount++;
+          if (typeof this.teacherConn.dataChannel.bufferedAmount !== 'number' || this.teacherConn.dataChannel.bufferedAmount < 512 * 1024) {
+            this.teacherConn.dataChannel.send(buffer);
+            sentCount++;
+          }
         } else if (this.teacherConn.open) {
           this.teacherConn.send(buffer);
           sentCount++;
@@ -1502,15 +1573,16 @@ class SignalingManager {
     if (this.isWsMode && this.ws && typeof this.ws.bufferedAmount === 'number') {
       max = this.ws.bufferedAmount;
     }
+    let openCount = 0;
+    let totalBuffered = 0;
     this.studentConnections.forEach((conn) => {
-      if (conn && conn.dataChannel && typeof conn.dataChannel.bufferedAmount === 'number') {
-        if (conn.dataChannel.bufferedAmount > max) max = conn.dataChannel.bufferedAmount;
+      if (conn && conn.dataChannel && conn.dataChannel.readyState === 'open' && typeof conn.dataChannel.bufferedAmount === 'number') {
+        openCount++;
+        totalBuffered += conn.dataChannel.bufferedAmount;
       }
     });
-    if (this.teacherConn && this.teacherConn.dataChannel && typeof this.teacherConn.dataChannel.bufferedAmount === 'number') {
-      if (this.teacherConn.dataChannel.bufferedAmount > max) max = this.teacherConn.dataChannel.bufferedAmount;
-    }
-    return max;
+    const avgBuffered = openCount > 0 ? (totalBuffered / openCount) : 0;
+    return Math.max(max, avgBuffered);
   }
 
   // =========================================================================

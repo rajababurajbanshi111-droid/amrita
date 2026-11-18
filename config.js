@@ -98,30 +98,14 @@
       } catch (e) {}
     },
 
-    // STUN and TURN Servers
+    // High-Reliability STUN Servers (Zero Auth, Instant Cross-Network Traversal)
     DEFAULT_ICE_SERVERS: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
-      { urls: 'stun:stun.cloudflare.com:3478' },
-      { urls: 'stun:stun.services.mozilla.com:3478' },
-      {
-        urls: [
-          'turn:openrelay.metered.ca:80',
-          'turn:openrelay.metered.ca:443',
-          'turn:openrelay.metered.ca:443?transport=tcp'
-        ],
-        username: 'openrelayproject',
-        credential: 'openrelayproject'
-      },
-      {
-        urls: [
-          'turn:eu-0.turn.peerjs.com:3478',
-          'turn:us-0.turn.peerjs.com:3478'
-        ],
-        username: 'peerjs',
-        credential: 'peerjsp'
-      }
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' }
     ],
 
     updateIceServersFromBackend: function (servers) {
@@ -136,8 +120,8 @@
 
     // Timeouts and Watchdogs (Milliseconds)
     TIMEOUTS: {
-      ICE_GATHERING_TIMEOUT: 4000,
-      CANDIDATE_PAIR_TIMEOUT: 10000,
+      ICE_GATHERING_TIMEOUT: 2500,
+      CANDIDATE_PAIR_TIMEOUT: 8000,
       WATCHDOG_INTERVAL: 2000,
       RECONNECT_DELAY_INITIAL: 1000,
       RECONNECT_DELAY_MAX: 15000,
