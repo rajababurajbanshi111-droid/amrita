@@ -460,6 +460,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       teacherUnreadChat = 0;
       teacherChatBadge.style.display = 'none';
     }
+
+    if (tabName === 'screen') {
+      if (teacherScreenPreview && teacherScreenPreview.srcObject && teacherScreenPreview.paused) {
+        teacherScreenPreview.muted = true;
+        teacherScreenPreview.play().catch(() => {});
+      }
+    }
   }
 
   document.querySelectorAll('[data-teacher-tab]').forEach((btn) => {
@@ -981,11 +988,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       showToast('Select screen, window, or tab to share...', 'info');
       const stream = await screenShare.startScreenShare(preset, true);
-      teacherScreenPreview.srcObject = stream;
-      teacherScreenPreview.play().catch(() => {});
-      teacherStageEmptyState.style.display = 'none';
-      teacherStageControls.style.display = 'flex';
-      teacherSidebarScreenDot.style.display = 'inline-block';
+      
+      // Ensure teacher preview video element is active, unmuted playback enabled, and explicitly displayed
+      if (teacherScreenPreview) {
+        teacherScreenPreview.muted = true;
+        teacherScreenPreview.defaultMuted = true;
+        teacherScreenPreview.playsInline = true;
+        teacherScreenPreview.setAttribute('muted', '');
+        teacherScreenPreview.setAttribute('playsinline', '');
+        teacherScreenPreview.style.setProperty('display', 'block', 'important');
+        teacherScreenPreview.srcObject = stream;
+        
+        const ensurePlay = () => {
+          if (teacherScreenPreview.paused) {
+            teacherScreenPreview.play().catch((err) => {
+              console.warn('[App] Teacher preview play retry:', err);
+            });
+          }
+        };
+        teacherScreenPreview.onloadedmetadata = ensurePlay;
+        teacherScreenPreview.oncanplay = ensurePlay;
+        ensurePlay();
+      }
+
+      // Hide fallback canvas and student banner so teacher's own video preview is 100% visible
+      const tCanvas = document.getElementById('teacherFallbackCanvas');
+      if (tCanvas) tCanvas.style.setProperty('display', 'none', 'important');
+      if (teacherStudentPresentingBanner) teacherStudentPresentingBanner.style.setProperty('display', 'none', 'important');
+      if (teacherStageEmptyState) teacherStageEmptyState.style.setProperty('display', 'none', 'important');
+      if (teacherStageControls) teacherStageControls.style.setProperty('display', 'flex', 'important');
+      if (teacherSidebarScreenDot) teacherSidebarScreenDot.style.display = 'inline-block';
 
       const hasAudio = !!screenShare.audioTrack;
       teacherAudioStatusDot.className = hasAudio ? 'status-dot active' : 'status-dot';
@@ -1007,10 +1039,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   teacherStopShareBtn.addEventListener('click', () => {
     screenShare.stopScreenShare();
-    teacherScreenPreview.srcObject = null;
-    teacherStageEmptyState.style.display = 'flex';
-    teacherStageControls.style.display = 'none';
-    teacherSidebarScreenDot.style.display = 'none';
+    if (teacherScreenPreview) {
+      teacherScreenPreview.srcObject = null;
+      teacherScreenPreview.style.setProperty('display', 'block', 'important');
+    }
+    const tCanvas = document.getElementById('teacherFallbackCanvas');
+    if (tCanvas) tCanvas.style.setProperty('display', 'none', 'important');
+    if (teacherStudentPresentingBanner) teacherStudentPresentingBanner.style.setProperty('display', 'none', 'important');
+    if (teacherStageEmptyState) teacherStageEmptyState.style.setProperty('display', 'flex', 'important');
+    if (teacherStageControls) teacherStageControls.style.setProperty('display', 'none', 'important');
+    if (teacherSidebarScreenDot) teacherSidebarScreenDot.style.display = 'none';
     showToast('Screen broadcasting stopped.', 'info');
     if (signaling && signaling.isConnected) {
       signaling.send({ type: 'stream_stopped' });
@@ -1019,9 +1057,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Handle native browser "Stop sharing" button bar click
   screenShare.onShareStopped = () => {
-    if (teacherScreenPreview) teacherScreenPreview.srcObject = null;
-    if (teacherStageEmptyState) teacherStageEmptyState.style.display = 'flex';
-    if (teacherStageControls) teacherStageControls.style.display = 'none';
+    if (teacherScreenPreview) {
+      teacherScreenPreview.srcObject = null;
+      teacherScreenPreview.style.setProperty('display', 'block', 'important');
+    }
+    const tCanvas = document.getElementById('teacherFallbackCanvas');
+    if (tCanvas) tCanvas.style.setProperty('display', 'none', 'important');
+    if (teacherStudentPresentingBanner) teacherStudentPresentingBanner.style.setProperty('display', 'none', 'important');
+    if (teacherStageEmptyState) teacherStageEmptyState.style.setProperty('display', 'flex', 'important');
+    if (teacherStageControls) teacherStageControls.style.setProperty('display', 'none', 'important');
     if (teacherSidebarScreenDot) teacherSidebarScreenDot.style.display = 'none';
     if (signaling && signaling.isConnected) {
       signaling.send({ type: 'stream_stopped' });
@@ -1286,6 +1330,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // If teacher is running and a student is actively presenting, render student's presentation
     if (classroom.role === 'teacher') {
+      // Guard: Only render student presentation if there is an active student presenter AND teacher is NOT presenting own screen
+      if (!classroom.activePresenterId || (screenShare && screenShare.isSharing)) {
+        return;
+      }
       const tCanvas = document.getElementById('teacherFallbackCanvas');
       try {
         const blob = data instanceof Blob ? data : new Blob([data], { type: 'image/jpeg' });
@@ -2402,6 +2450,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     showToast(`${name} is now sharing their screen with the classroom!`, 'success');
 
     if (teacherScreenPreview) {
+      teacherScreenPreview.muted = true;
+      teacherScreenPreview.defaultMuted = true;
+      teacherScreenPreview.playsInline = true;
+      teacherScreenPreview.setAttribute('muted', '');
+      teacherScreenPreview.setAttribute('playsinline', '');
       teacherScreenPreview.style.setProperty('display', 'block', 'important');
       teacherScreenPreview.srcObject = studentStream;
       teacherScreenPreview.play().catch(() => {});
@@ -2442,6 +2495,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       // If teacher was sharing their own screen, restore teacher's screen
       if (screenShare && screenShare.activeStream && screenShare.isSharing) {
         if (teacherScreenPreview) {
+          teacherScreenPreview.muted = true;
+          teacherScreenPreview.defaultMuted = true;
+          teacherScreenPreview.playsInline = true;
+          teacherScreenPreview.setAttribute('muted', '');
+          teacherScreenPreview.setAttribute('playsinline', '');
           teacherScreenPreview.style.setProperty('display', 'block', 'important');
           teacherScreenPreview.srcObject = screenShare.activeStream;
           teacherScreenPreview.play().catch(() => {});
